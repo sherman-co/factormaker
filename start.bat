@@ -1,11 +1,15 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
-if not exist node_modules (
-  echo در حال نصب برنامه (فقط بار اول، چند دقیقه صبر کنید)...
+if not exist "node_modules\express" (
+  echo Installing - first run only, please wait a few minutes...
   call npm install
+  if errorlevel 1 (
+    echo Install failed. Check your internet connection and try again.
+    pause
+    exit /b 1
+  )
 )
-echo برنامه در حال اجراست. مرورگر را باز کنید: http://localhost:3000
-start http://localhost:3000
+echo Starting... Open http://localhost:3000 in your browser
+start "" http://localhost:3000
 node server/index.js
 pause
