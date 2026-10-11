@@ -9,7 +9,6 @@ if not exist "node_modules\express" (
     exit /b 1
   )
 )
-echo Starting... Open http://localhost:3000 in your browser
-start "" http://localhost:3000
+set OPEN_BROWSER=1
 node server/index.js
 pause
