@@ -13,6 +13,7 @@ import { todayJalali, isValidJalaliString } from '../shared/jdate.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const COOKIE = 'fm_session';
+const VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
 
 class HttpError extends Error {
   constructor(status, message, extra) { super(message); this.status = status; this.extra = extra; }
@@ -53,6 +54,7 @@ export function createApp(dataDir) {
     res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
     res.json({ ok: true });
   });
+  app.get('/api/version', (_q, res) => res.json({ version: VERSION }));
   app.get('/api/me', (req, res) => {
     const u = userFromToken(db, tokenOf(req));
     if (!u) throw new HttpError(401, 'وارد نشده‌اید');

@@ -1,5 +1,7 @@
 import { get, post } from './api.js';
-import { h, toast } from './ui.js';
+import { h, toast, openCalendar } from './ui.js';
+import { toFaDigits } from '/shared/format.js';
+import { todayJalali } from '/shared/jdate.js';
 import { archivePage } from './pages/archive.js';
 import { invoicePage } from './pages/invoice.js';
 import { productsPage } from './pages/products.js';
@@ -8,6 +10,21 @@ import { settingsPage } from './pages/settings.js';
 
 const app = document.getElementById('app');
 let user = null;
+let version = '';
+const WEEKDAY = new Intl.DateTimeFormat('fa-IR', { timeZone: 'Asia/Tehran', weekday: 'long' });
+const TIME = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tehran', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+function clockEl() {
+  const el = h('a', { href: '#', class: 'clock', title: 'باز کردن تقویم شمسی (وقت تهران)', onclick: (e) => { e.preventDefault(); openCalendar(el, todayJalali()); } });
+  let seen = false;
+  const tick = () => {
+    if (seen && !el.isConnected) { clearInterval(timer); return; }
+    seen = seen || el.isConnected;
+    const now = new Date();
+    el.textContent = `${WEEKDAY.format(now)} ${toFaDigits(todayJalali(now))} — ${toFaDigits(TIME.format(now))}`;
+  };
+  const timer = setInterval(tick, 1000); tick();
+  return el;
+}
 
 function loginView() {
   app.replaceChildren();
@@ -28,9 +45,9 @@ const NAV = [['#/', 'بایگانی'], ['#/invoice/new', 'صدور فاکتور'
 async function route() {
   if (!user) return loginView();
   const hash = location.hash || '#/';
-  app.replaceChildren(h('div', { class: 'topbar' }, h('span', { class: 'brand' }, 'پیش‌فاکتور فروش'),
+  app.replaceChildren(h('div', { class: 'topbar' }, h('span', { class: 'brand' }, 'پیش‌فاکتور فروش', h('small', { class: 'ver', title: 'نسخه‌ی برنامه' }, version ? 'v' + toFaDigits(version) : '')),
     NAV.map(([href, label]) => h('a', { href, class: (href === '#/' ? hash === '#/' : hash.startsWith(href.replace('/new', ''))) && !(href === '#/invoice/new' && hash !== '#/invoice/new') ? 'active' : '' }, label)),
-    h('span', { class: 'sp' }),
+    h('span', { class: 'sp' }), clockEl(),
     h('a', { href: '#', onclick: async (e) => { e.preventDefault(); await post('/api/logout'); user = null; route(); } }, 'خروج (' + user.username + ')')));
   const page = h('div');
   app.append(page);
@@ -48,6 +65,7 @@ async function route() {
 window.addEventListener('hashchange', route);
 window.addEventListener('fm-logout', () => { user = null; route(); });
 (async () => {
+  try { version = (await get('/api/version')).version; } catch { /* ignore */ }
   try { user = (await get('/api/me')).user; } catch { user = null; }
   route();
 })();

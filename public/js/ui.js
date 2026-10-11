@@ -225,3 +225,35 @@ export function bindDate(input, { today, onChange } = {}) {
 
 export const faDate = (s) => toFaDigits(s || '');
 export function download(url) { const a = h('a', { href: url }); document.body.append(a); a.click(); a.remove(); }
+
+/** تقویم شمسی مستقل (برای نوار بالا)؛ زیر anchor باز می‌شود و با کلیک بیرون بسته می‌شود. */
+export function openCalendar(anchor, today) {
+  document.getElementById('topcal')?.remove();
+  let [jy, jm] = today.split('/').map(Number);
+  const box = h('div', { class: 'cal', id: 'topcal', style: 'position:fixed;top:56px;inset-inline-start:12px' });
+  const close = () => { box.remove(); document.removeEventListener('mousedown', outside, true); };
+  const outside = (e) => { if (!box.contains(e.target) && !anchor.contains(e.target)) close(); };
+  const draw = () => {
+    const len = jalaali.jalaaliMonthLength(jy, jm);
+    const g = jalaali.toGregorian(jy, jm, 1);
+    const first = (new Date(g.gy, g.gm - 1, g.gd).getDay() + 1) % 7;
+    const nav = (d) => { jm += d; if (jm > 12) { jm = 1; jy++; } if (jm < 1) { jm = 12; jy--; } draw(); };
+    const cells = DAYS.map((d) => h('b', {}, d));
+    for (let i = 0; i < first; i++) cells.push(h('span'));
+    for (let d = 1; d <= len; d++) {
+      const v = `${jy}/${pad(jm)}/${pad(d)}`;
+      const col = (first + d - 1) % 7;
+      cells.push(h('button', { type: 'button', class: v === today ? 'sel' : '', style: col === 6 ? 'color:var(--danger)' : '', title: `${d} ${MONTHS[jm - 1]}` }, toFaDigits(d)));
+    }
+    box.replaceChildren(
+      h('div', { class: 'cal-head' },
+        h('button', { type: 'button', class: 'btn small', onclick: () => nav(1) }, '‹'),
+        h('b', {}, `${MONTHS[jm - 1]} ${toFaDigits(jy)}`),
+        h('button', { type: 'button', class: 'btn small', onclick: () => nav(-1) }, '›')),
+      h('div', { class: 'cal-grid' }, cells),
+      h('div', { style: 'margin-top:6px;text-align:center' }, h('button', { type: 'button', class: 'btn small', onclick: () => { [jy, jm] = today.split('/').map(Number); draw(); } }, 'امروز')));
+  };
+  draw();
+  document.body.append(box);
+  document.addEventListener('mousedown', outside, true);
+}

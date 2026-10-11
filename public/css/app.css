@@ -87,3 +87,5 @@ table.grid tr:hover td{background:#f8fafc}
 .doc-switch button.on{background:var(--primary);color:#fff}
 .payopts{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
 .tag.pro{background:#e6eefb;color:#1f5fae}.tag.inv{background:#f2e6fb;color:#6b2fa5}
+.topbar .ver{font-size:11px;color:#8fb0d6;margin-inline-start:8px;font-weight:400}
+.topbar .clock{background:rgba(255,255,255,.1);color:#fff;font-variant-numeric:tabular-nums}

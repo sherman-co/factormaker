@@ -4,6 +4,7 @@ import { toFaDigits } from '/shared/format.js';
 
 export async function settingsPage(root) {
   const s = await get('/api/settings');
+  const ver = (await get('/api/version')).version;
   const fld = (l, el, hint) => h('div', { class: 'field' }, h('label', {}, l), el, hint ? h('small', { class: 'muted' }, hint) : null);
   const f = {
     company_title: h('input', { value: s.company_title }),
@@ -84,6 +85,7 @@ export async function settingsPage(root) {
       h('p', { class: 'muted' }, 'فایل PNG با پس‌زمینه شفاف بارگذاری کنید.'), stampBox,
       h('div', { style: 'margin-top:10px' }, h('label', {}, f.stamp_in_pdf, ' درج مهر در PDF (پیش‌فرض برای فاکتورهای جدید)')),
       h('div', { class: 'btnbar' }, h('button', { class: 'btn primary', onclick: save }, 'ذخیره'))),
+    h('div', { class: 'card' }, h('h2', {}, 'درباره‌ی برنامه'), h('p', {}, 'نسخه‌ی برنامه: ', h('b', { class: 'num', style: 'direction:ltr;display:inline-block' }, ver))),
     h('div', { class: 'card' }, h('h2', {}, 'بکاپ'),
       h('p', { class: 'muted' }, 'فایل دیتابیس را دانلود کنید. برای بکاپ کامل (شامل PDFها) کل پوشه data را کپی کنید.'),
       h('button', { class: 'btn', onclick: () => download('/api/backup') }, 'دانلود بکاپ دیتابیس')),
