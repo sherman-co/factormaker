@@ -104,7 +104,7 @@ export function calcTotals(items, discount = 0, taxPercent = 0) {
 }
 
 // ---------- کدها ----------
-export const GROUPS = { 1: 'پروفیل‌ها', 2: 'اتصالات', 3: 'پیچ‌ها', 4: 'مواد شیمیایی', 5: 'توری‌ها' };
+export const GROUPS = { 1: 'پروفیل‌ها', 2: 'اتصالات', 3: 'پیچ‌ها', 4: 'مواد شیمیایی', 5: 'توری‌ها', 6: 'فوم و عایق‌ها' };
 
 /** گروه از روی رقم صدگان کد. */
 export function groupOfCode(code) {
@@ -125,3 +125,10 @@ export function normalizeText(s) {
 }
 
 export const isValidJDate = (s) => /^\d{4}\/\d{2}\/\d{2}$/.test(s || '');
+
+/** برای جست‌وجو: یکسان‌سازی ی/ک عربی، حذف نیم‌فاصله و ارقام فارسی. */
+export function normalizeSearch(s) {
+  return toEnDigits(String(s ?? '')).toLowerCase().replace(/ي/g, 'ی').replace(/ك/g, 'ک').replace(/[\u200c\u200f]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+export const DOC_TYPES = { proforma: 'پیش‌فاکتور', invoice: 'فاکتور' };

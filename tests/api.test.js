@@ -37,12 +37,14 @@ test('بدون ورود دسترسی ندارد', async () => {
 test('کالاها', async () => {
   const r = await fetch(base + '/api/products', { headers: { cookie } });
   const list = await r.json();
-  assert.equal(list.length, 12);
-  assert.equal(list[6].description, 'پیچ M10×30');
+  assert.equal(list.length, 14);
+  assert.ok(list.some((p) => p.code === '601' && /فوم/.test(p.description)));
+  assert.ok(list.some((p) => p.code === '104'));
+  assert.equal(list.find((p) => p.code === '301').description, 'پیچ M10×30');
   assert.match(list[0].group, /پروفیل/);
   const dup = await call('POST', '/api/products', { code: '۱۰۱', description: 'x', unit: 'عدد', price: 1 });
   assert.equal(dup.http, 400);
-  const ok = await call('POST', '/api/products', { code: '104', description: 'پیچ m6x20', unit: 'عدد', price: '۱,۵۰۰' });
+  const ok = await call('POST', '/api/products', { code: '105', description: 'پیچ m6x20', unit: 'عدد', price: '۱,۵۰۰' });
   assert.equal(ok.http, 201);
   assert.equal(ok.description, 'پیچ M6×20');
   assert.equal(ok.price, 1500);
@@ -62,8 +64,12 @@ test('فاکتور نمونه: جمع، حروف، شماره، PDF یک‌صف�
   fs.mkdirSync('/tmp/claude-0/out', { recursive: true });
   fs.writeFileSync('/tmp/claude-0/out/sample.pdf', buf);
   assert.ok(fs.existsSync(path.join(tmp, 'pdfs', '169431.pdf')));
-  // نهایی قابل ویرایش نیست
-  assert.equal((await call('PUT', `/api/invoices/${inv.id}`, body())).http, 409);
+  // نهایی قابل ویرایش است و PDF دوباره ساخته می‌شود؛ شرح قبلی حفظ می‌شود
+  const ed = await call('PUT', `/api/invoices/${inv.id}`, body({ buyer: { name: 'خریدار ویرایش‌شده' }, doc_type: 'invoice' }));
+  assert.equal(ed.http, 200);
+  assert.equal(ed.status, 'final');
+  assert.equal(ed.doc_type, 'invoice');
+  assert.equal(ed.number, 169431);
 });
 
 test('نهایی تغییر قیمت کالا را نمی‌بیند؛ کپی و اصلاح', async () => {
@@ -110,7 +116,7 @@ test('شناسه ملی با صفر اول و فیلتر/اکسل', async () => 
   const x = await call('GET', '/api/invoices/export.xlsx?from=1405/07/01&to=1405/07/30', null, true);
   assert.equal(x.status, 200);
   assert.ok((await x.arrayBuffer()).byteLength > 1000);
-  const f = await (await fetch(base + '/api/invoices?q=' + encodeURIComponent('علیرضا') + '&status=final', { headers: { cookie } })).json();
+  const f = await (await fetch(base + '/api/invoices?q=' + encodeURIComponent('ویرایش') + '&status=final', { headers: { cookie } })).json();
   assert.equal(f.total, 1);
 });
 
@@ -130,4 +136,20 @@ test('بدترین حالت جمع‌ها (تخفیف+مالیات) در ۱۴ ر
   const buf = Buffer.from(await (await call('GET', `/api/invoices/${inv.id}/pdf`, null, true)).arrayBuffer());
   assert.equal(pageCount(buf), 1);
   fs.writeFileSync('/tmp/claude-0/out/worst.pdf', buf);
+});
+
+test('پرداخت (کارت/شبا) و حذف کامل', async () => {
+  await call('PUT', '/api/settings', { card_number: '۶۱۰۴-۳۳۸۶-۸۵۷۴-۱۹۹۹', sheba: 'ir290120020000009280252126', account_holder: 'حسینعلی ملکی' });
+  const inv = await call('POST', '/api/invoices', body({ pay: { card: true, sheba: true, account: true }, with_stamp: false }));
+  assert.equal(inv.http, 201);
+  const pay = JSON.parse(inv.pay_json);
+  assert.deepEqual(pay.map((p) => p.key), ['card', 'sheba', 'holder']);
+  assert.equal(pay[0].value, '6104338685741999');
+  const buf = Buffer.from(await (await call('GET', `/api/invoices/${inv.id}/pdf`, null, true)).arrayBuffer());
+  assert.equal(pageCount(buf), 1);
+  fs.writeFileSync('/tmp/claude-0/out/pay.pdf', buf);
+  const fin = await call('POST', '/api/invoices', body({ finalize: true }));
+  assert.equal((await call('DELETE', `/api/invoices/${fin.id}`)).http, 200);
+  assert.equal((await call('GET', `/api/invoices/${fin.id}`)).http, 404);
+  assert.ok(!fs.existsSync(path.join(tmp, 'pdfs', `${fin.number}.pdf`)));
 });

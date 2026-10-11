@@ -17,9 +17,20 @@ export const SEED_PRODUCTS = [
   ['502', 'توری درجه ۲', 'متر', 1330000],
 ];
 
+// کالاهای تازه از روی فاکتورهای قبلی (یک بار به دیتابیس‌های موجود هم اضافه می‌شود)
+export const SEED_V2 = [
+  ['104', 'پروفیل سه‌تیکه ادان ۶ متری', 'شاخه', 83000000],
+  ['601', 'فوم ۲ میلی‌متر، عرض ۵ سانتی‌متر', 'متر طول', 370000],
+];
+
 export const DEFAULT_SETTINGS = {
   company_title: 'گروه تولیدی پایتخت',
   invoice_title: 'پیش‌فاکتور فروش کالا و خدمات',
+  invoice_title_sale: 'فاکتور فروش کالا و خدمات',
+  card_number: '',
+  sheba: '',
+  account_number: '',
+  account_holder: '',
   seller_name: 'حسینعلی ملکی',
   seller_national_id: '0859041816',
   seller_phone: '',
@@ -78,11 +89,19 @@ export function openDb(dataDir) {
   const db = new DatabaseSync(path.join(dataDir, 'factormaker.db'));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  const cols = db.prepare('PRAGMA table_info(invoices)').all().map((c) => c.name);
+  if (!cols.includes('doc_type')) db.exec("ALTER TABLE invoices ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'proforma'");
+  if (!cols.includes('pay_json')) db.exec('ALTER TABLE invoices ADD COLUMN pay_json TEXT');
   const ins = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
   if (db.prepare('SELECT COUNT(*) c FROM products').get().c === 0) {
     const p = db.prepare('INSERT INTO products(code,description,unit,price) VALUES (?,?,?,?)');
     for (const r of SEED_PRODUCTS) p.run(...r);
+  }
+  if (!db.prepare("SELECT 1 FROM settings WHERE key='seed_v2'").get()) {
+    const p = db.prepare('INSERT OR IGNORE INTO products(code,description,unit,price) VALUES (?,?,?,?)');
+    for (const r of SEED_V2) p.run(...r);
+    db.prepare("INSERT INTO settings(key,value) VALUES ('seed_v2','1')").run();
   }
   return db;
 }

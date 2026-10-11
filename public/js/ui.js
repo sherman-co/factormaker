@@ -93,18 +93,53 @@ function hostOf(input) {
   return p;
 }
 
-export function autocomplete(input, { search, label, sub, onPick, minChars = 0 }) {
-  const host = () => hostOf(input);
+function highlight(text, q) {
+  if (!q) return text;
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return text;
+  return [text.slice(0, i), h('mark', {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
+}
+
+/**
+ * تکمیل خودکار با پنجره‌ی شناور (fixed) که از کانتینر جدول بیرون می‌زند و اسکرول داخلی ندارد مگر لیست خیلی بلند باشد.
+ * options: search(q)->items | label(it) | sub(it) | meta(it) | group(it) | onPick(it) | query() برای هایلایت
+ */
+export function autocomplete(input, { search, label, sub, meta, group, onPick, minChars = 0, width = 440 }) {
   let list = null; let items = []; let sel = -1; let seq = 0;
-  const close = () => { list?.remove(); list = null; sel = -1; };
+  const close = () => { list?.remove(); list = null; sel = -1; window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
+  function place() {
+    if (!list) return;
+    const r = input.getBoundingClientRect();
+    const w = Math.max(width, r.width);
+    const maxH = Math.min(420, window.innerHeight * 0.6);
+    const below = window.innerHeight - r.bottom - 8;
+    const above = r.top - 8;
+    const openUp = below < 220 && above > below;
+    list.style.maxHeight = Math.max(160, Math.min(maxH, openUp ? above : below)) + 'px';
+    list.style.width = w + 'px';
+    const left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8);
+    list.style.left = left + 'px';
+    if (openUp) { list.style.top = ''; list.style.bottom = (window.innerHeight - r.top + 4) + 'px'; } else { list.style.bottom = ''; list.style.top = (r.bottom + 4) + 'px'; }
+  }
   const paint = () => {
     list?.remove();
     if (!items.length) { list = null; return; }
-    list = h('div', { class: 'ac-list' }, items.map((it, i) =>
-      h('div', { class: i === sel ? 'sel' : '', onmousedown: (e) => { e.preventDefault(); pick(i); } },
-        h('span', {}, label(it)), sub ? h('small', {}, sub(it)) : null)));
-    host().append(list);
-    list.style.top = input.offsetTop + input.offsetHeight + 'px';
+    const q = input.value.trim();
+    const nodes = [];
+    let lastGroup = null;
+    items.forEach((it, i) => {
+      if (group) { const g = group(it); if (g !== lastGroup) { nodes.push(h('div', { class: 'ac-group' }, g)); lastGroup = g; } }
+      nodes.push(h('div', { class: 'ac-item' + (i === sel ? ' sel' : ''), 'data-i': i, onmousedown: (e) => { e.preventDefault(); pick(i); } },
+        h('span', { class: 'ac-main' }, highlight(label(it), q)),
+        meta ? h('span', { class: 'ac-meta' }, meta(it)) : null,
+        sub ? h('span', { class: 'ac-sub' }, sub(it)) : null));
+    });
+    list = h('div', { class: 'ac-list' }, nodes);
+    document.body.append(list);
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    list.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
   };
   const pick = (i) => { const it = items[i]; close(); if (it) onPick(it); };
   const run = async () => {
@@ -113,13 +148,13 @@ export function autocomplete(input, { search, label, sub, onPick, minChars = 0 }
     const my = ++seq;
     const res = await search(q);
     if (my !== seq) return;
-    items = res.slice(0, 40); sel = -1; paint();
+    items = res; sel = res.length && q.trim() ? 0 : -1; paint();
   };
   input.addEventListener('input', run);
   input.addEventListener('focus', () => { if (minChars === 0) run(); });
-  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('blur', () => setTimeout(close, 130));
   input.addEventListener('keydown', (e) => {
-    if (!list) return;
+    if (!list) { if (e.key === 'ArrowDown') run(); return; }
     if (e.key === 'ArrowDown') { sel = Math.min(items.length - 1, sel + 1); paint(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); paint(); e.preventDefault(); }
     else if (e.key === 'Enter' && sel >= 0) { pick(sel); e.preventDefault(); }

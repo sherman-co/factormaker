@@ -23,7 +23,7 @@ function loginView() {
   u.focus();
 }
 
-const NAV = [['#/', 'فاکتورها'], ['#/invoice/new', 'صدور پیش‌فاکتور'], ['#/products', 'کالاها'], ['#/customers', 'مشتریان'], ['#/settings', 'تنظیمات']];
+const NAV = [['#/', 'بایگانی'], ['#/invoice/new', 'صدور فاکتور'], ['#/products', 'کالاها'], ['#/customers', 'مشتریان'], ['#/settings', 'تنظیمات']];
 
 async function route() {
   if (!user) return loginView();

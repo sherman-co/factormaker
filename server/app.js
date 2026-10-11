@@ -23,6 +23,7 @@ const clean = (s) => String(s ?? '').trim();
 const digitsText = (s) => toEnDigits(clean(s)); // شناسه ملی/تلفن: متن با ارقام انگلیسی، صفر اول حفظ
 
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS).filter((k) => k !== 'stamp_file' && k !== 'last_invoice_number');
+const PAY_LABELS = { card: ['شماره کارت', 'card_number'], sheba: ['شماره شبا', 'sheba'], account: ['شماره حساب', 'account_number'] };
 
 export function createApp(dataDir) {
   const db = openDb(dataDir);
@@ -97,6 +98,9 @@ export function createApp(dataDir) {
       if (n === null || n <= 0) throw bad('مدت اعتبار نامعتبر است');
       vals.validity_hours = String(n);
     }
+    if ('card_number' in vals) vals.card_number = digitsText(vals.card_number).replace(/\D/g, '');
+    if ('account_number' in vals) vals.account_number = digitsText(vals.account_number);
+    if ('sheba' in vals) vals.sheba = digitsText(vals.sheba).replace(/[\s-]/g, '').toUpperCase();
     for (const k of ['show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
     if ('last_invoice_number' in b) {
       const n = parseNumber(b.last_invoice_number);
@@ -213,7 +217,7 @@ export function createApp(dataDir) {
   app.get('/api/invoices/next-number', (_q, res) => res.json({ number: nextNumber() }));
 
   /** اعتبارسنجی بدنه فاکتور و تبدیل به مقادیر نهایی (قیمت/شرح از جدول کالاها). */
-  function normalizeInvoice(b, { final }) {
+  function normalizeInvoice(b, { final, existing }) {
     const errors = [];
     const jdate = toEnDigits(clean(b.jdate));
     if (!isValidJalaliString(jdate)) errors.push('تاریخ نامعتبر است (قالب ۱۴۰۵/۰۷/۱۹)');
@@ -231,13 +235,16 @@ export function createApp(dataDir) {
       const row = items.length + 1;
       const p = code && db.prepare('SELECT * FROM products WHERE code=?').get(code);
       if (!p) { errors.push(`ردیف ${i + 1}: کد نامعتبر`); return; }
-      if (!p.active) { errors.push(`ردیف ${i + 1}: کالای ${code} غیرفعال است`); return; }
+      const oldRow = existing?.status === 'final' && existing.items.find((x) => x.product_code === code);
+      if (!p.active && !oldRow) { errors.push(`ردیف ${i + 1}: کالای ${code} غیرفعال است`); return; }
       const qty = parseNumber(r.qty);
       if (qty === null || qty <= 0 || qty > 1e9) { errors.push(`ردیف ${i + 1}: مقدار نامعتبر`); return; }
       const price = r.unit_price === '' || r.unit_price == null ? p.price : parseNumber(r.unit_price);
       if (price === null || price < 0 || price > 1e13) { errors.push(`ردیف ${i + 1}: مبلغ واحد نامعتبر`); return; }
+      // در ویرایش فاکتور نهایی، ردیف‌های قبلی شرح/واحد/قیمت لیستِ لحظه‌ی ثبت را نگه می‌دارند
+      const old = existing?.status === 'final' && existing.items.find((x) => x.product_code === code);
       items.push({
-        position: row, code, description: p.description, unit: p.unit, qty, unit_price: Math.round(price), list_price: p.price,
+        position: row, code, description: old ? old.description : p.description, unit: old ? old.unit : p.unit, qty, unit_price: Math.round(price), list_price: old ? old.list_price : p.price,
         line_total: lineTotal(qty, Math.round(price)), remark: clean(r.remark),
       });
     });
@@ -249,7 +256,10 @@ export function createApp(dataDir) {
     const totals = errors.length ? null : calcTotals(items, discount, taxPct);
     if (totals && totals.discount > totals.subtotal) errors.push('تخفیف از جمع کل بیشتر است');
     if (errors.length) throw new HttpError(422, errors[0], { errors });
-    return { jdate, buyer, items, totals, notes: clean(b.notes), with_stamp: !!b.with_stamp, customer_id: b.customer_id ? Number(b.customer_id) : null };
+    const doc_type = b.doc_type === 'invoice' ? 'invoice' : 'proforma';
+    const pay = {};
+    for (const k of Object.keys(PAY_LABELS)) pay[k] = !!b.pay?.[k];
+    return { jdate, buyer, items, totals, doc_type, pay, notes: clean(b.notes), with_stamp: !!b.with_stamp, customer_id: b.customer_id ? Number(b.customer_id) : null };
   }
 
   function resolveCustomer(n) {
@@ -261,11 +271,27 @@ export function createApp(dataDir) {
       .run(n.buyer.name, n.buyer.national_id, n.buyer.phone, n.buyer.address, n.buyer.reg_no).lastInsertRowid;
   }
 
+  function sellerSnapshot(s) {
+    return { ...sellerFrom(s), company_title: s.company_title, title_proforma: s.invoice_title, title_sale: s.invoice_title_sale, show_code: s.show_code_in_print === '1', holder: s.account_holder };
+  }
+  /** فهرست خطوط پرداخت؛ مقدار قبلی ذخیره‌شده در همان فاکتور حفظ می‌شود. */
+  function payList(flags, oldJson, s) {
+    const old = oldJson ? JSON.parse(oldJson) : [];
+    const out = [];
+    for (const [k, [label, key]] of Object.entries(PAY_LABELS)) {
+      if (!flags[k]) continue;
+      const prev = old.find((x) => x.key === k);
+      const value = prev?.value || s[key];
+      if (value) out.push({ key: k, label, value });
+    }
+    if (out.length && s.account_holder) out.push({ key: 'holder', label: 'به نام', value: s.account_holder });
+    return out;
+  }
   function sellerFrom(s) {
     return { name: s.seller_name, national_id: s.seller_national_id, phone: s.seller_phone, address: s.seller_address };
   }
 
-  function saveInvoice(id, n, { final, copiedFrom }) {
+  function saveInvoice(id, n, { final, copiedFrom, existing }) {
     const now = new Date().toISOString();
     const s = getSettings(db);
     const stampOk = n.with_stamp && s.stamp_file && fs.existsSync(path.join(dataDir, 'stamps', s.stamp_file));
@@ -277,8 +303,9 @@ export function createApp(dataDir) {
         jdate: n.jdate, customer_id: customerId, ...Object.fromEntries(Object.entries(n.buyer).map(([k, v]) => ['buyer_' + k, v])),
         subtotal: t.subtotal, discount: t.discount, tax_percent: t.taxPercent, tax_amount: t.taxAmount, payable: t.payable,
         amount_words: words, notes: n.notes, with_stamp: stampOk ? 1 : 0, stamp_file: stampOk ? s.stamp_file : null,
-        status: final ? 'final' : 'draft', seller_json: final ? JSON.stringify({ ...sellerFrom(s), company_title: s.company_title, invoice_title: s.invoice_title, show_code: s.show_code_in_print === '1' }) : null,
-        finalized_at: final ? now : null, updated_at: now,
+        status: final ? 'final' : 'draft', doc_type: n.doc_type, pay_json: JSON.stringify(payList(n.pay, existing?.pay_json, s)),
+        seller_json: final ? (existing?.seller_json || JSON.stringify(sellerSnapshot(s))) : null,
+        finalized_at: final ? (existing?.finalized_at || now) : null, updated_at: now,
       };
       if (id) {
         const cols = Object.keys(f);
@@ -306,10 +333,12 @@ export function createApp(dataDir) {
   function renderData(inv, { stampFile } = {}) {
     const s = getSettings(db);
     const snap = inv.seller_json ? JSON.parse(inv.seller_json) : null;
-    const seller = snap || { ...sellerFrom(s), company_title: s.company_title, invoice_title: s.invoice_title, show_code: s.show_code_in_print === '1' };
+    const seller = snap || sellerSnapshot(s);
     const sf = stampFile ?? inv.stamp_file;
     return {
-      number: inv.number, jdate: inv.jdate, company_title: seller.company_title, invoice_title: seller.invoice_title,
+      number: inv.number, jdate: inv.jdate, company_title: seller.company_title,
+      invoice_title: inv.doc_type === 'invoice' ? (seller.title_sale || s.invoice_title_sale) : (seller.title_proforma || seller.invoice_title || s.invoice_title),
+      pay: inv.pay_json ? JSON.parse(inv.pay_json) : [],
       seller: { name: seller.name, national_id: seller.national_id, phone: seller.phone, address: seller.address },
       buyer: { name: inv.buyer_name, national_id: inv.buyer_national_id, phone: inv.buyer_phone, address: inv.buyer_address, reg_no: inv.buyer_reg_no },
       items: inv.items.map((i) => ({ code: i.product_code, description: i.description, qty: i.qty, unit: i.unit, unit_price: i.unit_price, line_total: i.line_total, remark: i.remark })),
@@ -356,19 +385,17 @@ export function createApp(dataDir) {
   app.put('/api/invoices/:id', async (req, res) => {
     const id = Number(req.params.id);
     const cur = loadInvoice(id);
-    if (cur.status === 'final') throw new HttpError(409, 'فاکتور نهایی قابل ویرایش نیست؛ از «کپی و اصلاح» استفاده کنید.');
-    const final = req.body?.finalize === true;
-    const n = normalizeInvoice(req.body || {}, { final });
-    saveInvoice(id, n, { final });
+    // نهایی‌ها هم قابل ویرایش‌اند (PDF دوباره ساخته می‌شود)؛ to_draft برای برگرداندن به پیش‌نویس
+    const final = req.body?.to_draft === true ? false : (req.body?.finalize === true || cur.status === 'final');
+    const n = normalizeInvoice(req.body || {}, { final, existing: cur });
+    saveInvoice(id, n, { final, existing: cur });
     if (final) await finalizeWithPdf(id);
     res.json(summary(id));
   });
   app.delete('/api/invoices/:id', (req, res) => {
     const inv = loadInvoice(Number(req.params.id));
-    if (inv.status === 'final') throw new HttpError(409, 'فاکتور نهایی حذف نمی‌شود.');
-    const max = db.prepare('SELECT MAX(number) m FROM invoices').get().m;
-    if (inv.number !== max) throw new HttpError(409, 'برای پشت‌سرهم ماندن شماره‌ها فقط پیش‌نویسِ آخرین شماره قابل حذف است.');
     db.prepare('DELETE FROM invoices WHERE id=?').run(inv.id);
+    if (inv.pdf_file) fs.rmSync(path.join(dataDir, 'pdfs', inv.pdf_file), { force: true });
     res.json({ ok: true });
   });
   app.post('/api/invoices/:id/copy', (req, res) => {
@@ -376,9 +403,9 @@ export function createApp(dataDir) {
     const id = tx(db, () => {
       const now = new Date().toISOString();
       const s = getSettings(db);
-      const newId = db.prepare(`INSERT INTO invoices(number,jdate,status,customer_id,buyer_name,buyer_national_id,buyer_phone,buyer_address,buyer_reg_no,
-        subtotal,discount,tax_percent,tax_amount,payable,amount_words,notes,copied_from,created_at,updated_at) VALUES (?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(nextNumber(), todayJalali(), src.customer_id, src.buyer_name, src.buyer_national_id, src.buyer_phone, src.buyer_address, src.buyer_reg_no,
+      const newId = db.prepare(`INSERT INTO invoices(number,jdate,status,doc_type,pay_json,customer_id,buyer_name,buyer_national_id,buyer_phone,buyer_address,buyer_reg_no,
+        subtotal,discount,tax_percent,tax_amount,payable,amount_words,notes,copied_from,created_at,updated_at) VALUES (?,?,'draft',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(nextNumber(), todayJalali(), src.doc_type, src.pay_json, src.customer_id, src.buyer_name, src.buyer_national_id, src.buyer_phone, src.buyer_address, src.buyer_reg_no,
           src.subtotal, src.discount, src.tax_percent, src.tax_amount, src.payable, src.amount_words, src.notes, src.id, now, now).lastInsertRowid;
       const ins = db.prepare(`INSERT INTO invoice_items(invoice_id,position,product_code,description,qty,unit,unit_price,list_price,line_total,remark) VALUES (?,?,?,?,?,?,?,?,?,?)`);
       for (const i of src.items) ins.run(newId, i.position, i.product_code, i.description, i.qty, i.unit, i.unit_price, i.list_price, i.line_total, i.remark);
@@ -392,7 +419,7 @@ export function createApp(dataDir) {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('فاکتورها', { views: [{ rightToLeft: true, state: 'frozen', ySplit: 1 }] });
     ws.columns = [
-      { header: 'شماره', key: 'number', width: 12 }, { header: 'تاریخ', key: 'jdate', width: 12 },
+      { header: 'شماره', key: 'number', width: 12 }, { header: 'نوع', key: 'type', width: 12 }, { header: 'تاریخ', key: 'jdate', width: 12 },
       { header: 'خریدار', key: 'buyer_name', width: 28 }, { header: 'شناسه ملی خریدار', key: 'nid', width: 18 },
       { header: 'جمع کل (ریال)', key: 'subtotal', width: 20 }, { header: 'تخفیف (ریال)', key: 'discount', width: 16 },
       { header: 'مالیات (ریال)', key: 'tax_amount', width: 16 }, { header: 'مبلغ قابل پرداخت (ریال)', key: 'payable', width: 24 },
@@ -400,7 +427,7 @@ export function createApp(dataDir) {
     ];
     ws.getRow(1).font = { bold: true };
     for (const r of rows) {
-      ws.addRow({ ...r, nid: r.buyer_national_id, status: r.status === 'final' ? 'نهایی' : 'پیش‌نویس' });
+      ws.addRow({ ...r, type: r.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور', nid: r.buyer_national_id, status: r.status === 'final' ? 'نهایی' : 'پیش‌نویس' });
     }
     for (const k of ['subtotal', 'discount', 'tax_amount', 'payable']) ws.getColumn(k).numFmt = '#,##0';
     ws.getColumn('nid').numFmt = '@';
@@ -422,11 +449,12 @@ export function createApp(dataDir) {
     if (from) { where.push('jdate >= ?'); args.push(from); }
     if (to) { where.push('jdate <= ?'); args.push(to); }
     if (q.status === 'draft' || q.status === 'final') { where.push('status = ?'); args.push(q.status); }
+    if (q.doc_type === 'proforma' || q.doc_type === 'invoice') { where.push('doc_type = ?'); args.push(q.doc_type); }
     const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
     const total = db.prepare(`SELECT COUNT(*) c FROM invoices ${w}`).get(...args).c;
     const page = Math.max(1, Number(q.page) || 1);
     const size = 25;
-    const rows = db.prepare(`SELECT id,number,jdate,buyer_name,buyer_national_id,subtotal,discount,tax_amount,payable,status,copied_from FROM invoices ${w}
+    const rows = db.prepare(`SELECT id,number,jdate,doc_type,buyer_name,buyer_national_id,subtotal,discount,tax_amount,payable,status,copied_from FROM invoices ${w}
       ORDER BY number DESC ${all ? '' : `LIMIT ${size} OFFSET ${(page - 1) * size}`}`).all(...args);
     return { rows, total, page, size };
   }
@@ -438,7 +466,7 @@ export function createApp(dataDir) {
     const stampFile = n.with_stamp ? s.stamp_file : null;
     const number = req.body?.number ? Number(toEnDigits(req.body.number)) : nextNumber();
     const inv = {
-      number, jdate: n.jdate, buyer_name: n.buyer.name, buyer_national_id: n.buyer.national_id, buyer_phone: n.buyer.phone,
+      number, jdate: n.jdate, doc_type: n.doc_type, pay_json: JSON.stringify(payList(n.pay, null, s)), buyer_name: n.buyer.name, buyer_national_id: n.buyer.national_id, buyer_phone: n.buyer.phone,
       buyer_address: n.buyer.address, buyer_reg_no: n.buyer.reg_no, items: n.items.map((i) => ({ ...i, product_code: i.code })),
       subtotal: n.totals.subtotal, discount: n.totals.discount, tax_percent: n.totals.taxPercent, tax_amount: n.totals.taxAmount,
       payable: n.totals.payable, amount_words: amountToWords(n.totals.payable), notes: n.notes, with_stamp: !!stampFile, stamp_file: stampFile,

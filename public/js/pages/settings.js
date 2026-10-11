@@ -8,6 +8,11 @@ export async function settingsPage(root) {
   const f = {
     company_title: h('input', { value: s.company_title }),
     invoice_title: h('input', { value: s.invoice_title }),
+    invoice_title_sale: h('input', { value: s.invoice_title_sale }),
+    card_number: bindDigitsText(h('input', { value: toFaDigits(s.card_number) })),
+    sheba: bindDigitsText(h('input', { value: toFaDigits(s.sheba), placeholder: 'IR...' })),
+    account_number: bindDigitsText(h('input', { value: toFaDigits(s.account_number) })),
+    account_holder: h('input', { value: s.account_holder }),
     seller_name: h('input', { value: s.seller_name }),
     seller_national_id: bindDigitsText(h('input', { value: toFaDigits(s.seller_national_id) })),
     seller_phone: bindDigitsText(h('input', { value: toFaDigits(s.seller_phone) })),
@@ -26,7 +31,8 @@ export async function settingsPage(root) {
   async function save() {
     try {
       await put('/api/settings', {
-        company_title: f.company_title.value, invoice_title: f.invoice_title.value, seller_name: f.seller_name.value,
+        company_title: f.company_title.value, invoice_title: f.invoice_title.value, invoice_title_sale: f.invoice_title_sale.value,
+        card_number: digitsValue(f.card_number), sheba: digitsValue(f.sheba), account_number: digitsValue(f.account_number), account_holder: f.account_holder.value, seller_name: f.seller_name.value,
         seller_national_id: digitsValue(f.seller_national_id), seller_phone: digitsValue(f.seller_phone), seller_address: f.seller_address.value,
         last_invoice_number: numValue(f.last_invoice_number), default_tax_percent: numValue(f.default_tax_percent) ?? 0,
         validity_hours: numValue(f.validity_hours) ?? 24, default_notes: f.default_notes.value,
@@ -61,9 +67,12 @@ export async function settingsPage(root) {
   root.append(h('div', { class: 'wrap' },
     h('div', { class: 'card' }, h('h1', {}, 'تنظیمات'),
       h('h2', {}, 'مشخصات فروشنده و عنوان‌ها'),
-      h('div', { class: 'row' }, fld('عنوان شرکت (سربرگ)', f.company_title), fld('عنوان فاکتور', f.invoice_title)),
+      h('div', { class: 'row' }, fld('عنوان شرکت (سربرگ)', f.company_title), fld('عنوان پیش‌فاکتور', f.invoice_title), fld('عنوان فاکتور', f.invoice_title_sale)),
       h('div', { class: 'row', style: 'margin-top:10px' }, fld('نام فروشنده', f.seller_name), fld('شناسه ملی', f.seller_national_id), fld('تلفن', f.seller_phone)),
       h('div', { style: 'margin-top:10px' }, fld('نشانی فروشنده', f.seller_address)),
+      h('h2', { style: 'margin-top:20px' }, 'اطلاعات پرداخت (کارت / شبا / حساب)'),
+      h('p', { class: 'muted', style: 'margin:0 0 8px' }, 'اینجا ثبت کنید؛ در هر فاکتور می‌توانید انتخاب کنید کدام‌ها در چاپ بیایند.'),
+      h('div', { class: 'row' }, fld('شماره کارت', f.card_number), fld('شماره شبا', f.sheba), fld('شماره حساب', f.account_number), fld('نام صاحب حساب', f.account_holder)),
       h('h2', { style: 'margin-top:20px' }, 'شماره‌گذاری، مالیات و توضیحات'),
       h('div', { class: 'row' },
         fld('شماره آخرین فاکتور صادرشده', f.last_invoice_number, 'فاکتور بعدی یک عدد بیشتر خواهد بود.'),
