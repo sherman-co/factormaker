@@ -14,7 +14,7 @@ test('مبلغ به حروف', () => {
   assert.equal(amountToWords(0), 'صفر ریال');
   assert.equal(amountToWords(1000), 'یک هزار ریال');
   assert.equal(amountToWords(100000), 'یکصد هزار ریال');
-  assert.equal(amountToWords(55232100000), 'پنجاه و پنج میلیارد و دویست و سی و دو میلیون و یکصد هزار ریال');
+  assert.equal(amountToWords(45321700000), 'چهل و پنج میلیارد و سیصد و بیست و یک میلیون و هفتصد هزار ریال');
   assert.equal(amountToWords(1500000000), 'یک میلیارد و پانصد میلیون ریال');
   assert.equal(amountToWords(1000000000000), 'یک هزار میلیارد ریال');
   assert.equal(amountToWords(12), 'دوازده ریال');
@@ -30,11 +30,12 @@ test('ارقام و اعداد', () => {
   assert.equal(groupOfCode('۳۰۲'), '۳۰۰ - پیچ‌ها');
 });
 
-test('فاکتور نمونه', () => {
-  const items = [[260, 32e6], [260, 69e6], [2100, 410000], [2100, 1380000], [2100, 77000], [2100, 44000],
-    [15000, 390000], [16000, 69000], [35000, 25000], [8, 1.5e9], [1800, 1520000], [1800, 1330000]]
-    .map(([qty, unit_price]) => ({ qty, unit_price }));
+test('محاسبه‌ی جمع‌ها', () => {
+  const items = [{ qty: 10, unit_price: 1000000 }, { qty: 2.5, unit_price: 400000 }, { qty: 3, unit_price: 1234567 }];
   const t = calcTotals(items, 0, 0);
-  assert.equal(t.payable, 55232100000);
-  assert.equal(calcTotals(items, 100, 9).taxAmount, Math.round((55232100000 - 100) * 0.09));
+  assert.equal(t.subtotal, 10000000 + 1000000 + 3703701);
+  assert.equal(t.payable, t.subtotal);
+  const t2 = calcTotals(items, 100, 9);
+  assert.equal(t2.taxAmount, Math.round((t.subtotal - 100) * 0.09));
+  assert.equal(t2.payable, t.subtotal - 100 + t2.taxAmount);
 });

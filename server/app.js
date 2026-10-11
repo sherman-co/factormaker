@@ -24,7 +24,7 @@ const clean = (s) => String(s ?? '').trim();
 const digitsText = (s) => toEnDigits(clean(s)); // شناسه ملی/تلفن: متن با ارقام انگلیسی، صفر اول حفظ
 
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS).filter((k) => k !== 'stamp_file' && k !== 'last_invoice_number');
-const PAY_LABELS = { card: ['شماره کارت', 'card_number'], sheba: ['شماره شبا', 'sheba'], account: ['شماره حساب', 'account_number'] };
+const PAY_LABELS = { card: ['شماره کارت', 'card'], sheba: ['شماره شبا', 'sheba'], account: ['شماره حساب', 'account'] };
 
 export function createApp(dataDir) {
   const db = openDb(dataDir);
@@ -100,9 +100,6 @@ export function createApp(dataDir) {
       if (n === null || n <= 0) throw bad('مدت اعتبار نامعتبر است');
       vals.validity_hours = String(n);
     }
-    if ('card_number' in vals) vals.card_number = digitsText(vals.card_number).replace(/\D/g, '');
-    if ('account_number' in vals) vals.account_number = digitsText(vals.account_number);
-    if ('sheba' in vals) vals.sheba = digitsText(vals.sheba).replace(/[\s-]/g, '').toUpperCase();
     for (const k of ['show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
     if ('last_invoice_number' in b) {
       const n = parseNumber(b.last_invoice_number);
@@ -210,6 +207,37 @@ export function createApp(dataDir) {
     res.json({ ok: true });
   });
 
+  // ---------- حساب‌های بانکی (کارت / شبا / حساب) ----------
+  function validateAccount(b) {
+    const title = normalizeText(b.title);
+    if (!title) throw bad('عنوان حساب الزامی است (مثلاً «حساب اصلی»)');
+    const card = digitsText(b.card).replace(/[\s-]/g, '');
+    if (card && !/^\d{16}$/.test(card)) throw bad('شماره کارت باید ۱۶ رقم باشد');
+    let sheba = digitsText(b.sheba).replace(/[\s-]/g, '').toUpperCase();
+    if (sheba && !sheba.startsWith('IR')) sheba = 'IR' + sheba;
+    if (sheba && !/^IR\d{24}$/.test(sheba)) throw bad('شماره شبا باید IR و ۲۴ رقم باشد');
+    const account = digitsText(b.account);
+    if (!card && !sheba && !account) throw bad('حداقل یکی از شماره کارت، شبا یا حساب را وارد کنید');
+    return { title, holder: normalizeText(b.holder), card, sheba, account };
+  }
+  app.get('/api/payment-accounts', (_q, res) => res.json(db.prepare('SELECT * FROM payment_accounts ORDER BY id').all()));
+  app.post('/api/payment-accounts', (req, res) => {
+    const a = validateAccount(req.body || {});
+    const r = db.prepare('INSERT INTO payment_accounts(title,holder,card,sheba,account) VALUES (?,?,?,?,?)').run(a.title, a.holder, a.card, a.sheba, a.account);
+    res.status(201).json(db.prepare('SELECT * FROM payment_accounts WHERE id=?').get(r.lastInsertRowid));
+  });
+  app.put('/api/payment-accounts/:id', (req, res) => {
+    const id = Number(req.params.id);
+    if (!db.prepare('SELECT id FROM payment_accounts WHERE id=?').get(id)) throw new HttpError(404, 'حساب پیدا نشد');
+    const a = validateAccount(req.body || {});
+    db.prepare('UPDATE payment_accounts SET title=?,holder=?,card=?,sheba=?,account=? WHERE id=?').run(a.title, a.holder, a.card, a.sheba, a.account, id);
+    res.json(db.prepare('SELECT * FROM payment_accounts WHERE id=?').get(id));
+  });
+  app.delete('/api/payment-accounts/:id', (req, res) => { // فاکتورها نسخه‌ی خودشان را دارند
+    db.prepare('DELETE FROM payment_accounts WHERE id=?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
   // ---------- فاکتورها ----------
   const nextNumber = () => {
     const last = Number(getSettings(db).last_invoice_number) || 0;
@@ -259,7 +287,7 @@ export function createApp(dataDir) {
     if (totals && totals.discount > totals.subtotal) errors.push('تخفیف از جمع کل بیشتر است');
     if (errors.length) throw new HttpError(422, errors[0], { errors });
     const doc_type = b.doc_type === 'invoice' ? 'invoice' : 'proforma';
-    const pay = {};
+    const pay = { account_id: b.pay?.account_id ? Number(b.pay.account_id) : null };
     for (const k of Object.keys(PAY_LABELS)) pay[k] = !!b.pay?.[k];
     return { jdate, buyer, items, totals, doc_type, pay, notes: clean(b.notes), with_stamp: !!b.with_stamp, customer_id: b.customer_id ? Number(b.customer_id) : null };
   }
@@ -274,20 +302,27 @@ export function createApp(dataDir) {
   }
 
   function sellerSnapshot(s) {
-    return { ...sellerFrom(s), company_title: s.company_title, title_proforma: s.invoice_title, title_sale: s.invoice_title_sale, show_code: s.show_code_in_print === '1', holder: s.account_holder };
+    return { ...sellerFrom(s), company_title: s.company_title, title_proforma: s.invoice_title, title_sale: s.invoice_title_sale, show_code: s.show_code_in_print === '1' };
   }
-  /** فهرست خطوط پرداخت؛ مقدار قبلی ذخیره‌شده در همان فاکتور حفظ می‌شود. */
-  function payList(flags, oldJson, s) {
-    const old = oldJson ? JSON.parse(oldJson) : [];
-    const out = [];
-    for (const [k, [label, key]] of Object.entries(PAY_LABELS)) {
+  /** اطلاعات پرداخت (نسخه‌ی لحظه‌ی ثبت)؛ مقدار قبلیِ همان حساب در همان فاکتور حفظ می‌شود. */
+  const parsePay = (json) => {
+    if (!json) return { account_id: null, lines: [] };
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? { account_id: null, lines: v } : v;
+  };
+  function payList(flags, oldJson) {
+    const acc = flags.account_id && db.prepare('SELECT * FROM payment_accounts WHERE id=?').get(flags.account_id);
+    if (!acc) return { account_id: null, lines: [] };
+    const old = parsePay(oldJson);
+    const sameAcc = old.account_id === acc.id;
+    const lines = [];
+    for (const [k, [label, col]] of Object.entries(PAY_LABELS)) {
       if (!flags[k]) continue;
-      const prev = old.find((x) => x.key === k);
-      const value = prev?.value || s[key];
-      if (value) out.push({ key: k, label, value });
+      const value = (sameAcc && old.lines.find((x) => x.key === k)?.value) || acc[col];
+      if (value) lines.push({ key: k, label, value });
     }
-    if (out.length && s.account_holder) out.push({ key: 'holder', label: 'به نام', value: s.account_holder });
-    return out;
+    if (lines.length && acc.holder) lines.push({ key: 'holder', label: 'به نام', value: (sameAcc && old.lines.find((x) => x.key === 'holder')?.value) || acc.holder });
+    return { account_id: acc.id, lines };
   }
   function sellerFrom(s) {
     return { name: s.seller_name, national_id: s.seller_national_id, phone: s.seller_phone, address: s.seller_address };
@@ -305,7 +340,7 @@ export function createApp(dataDir) {
         jdate: n.jdate, customer_id: customerId, ...Object.fromEntries(Object.entries(n.buyer).map(([k, v]) => ['buyer_' + k, v])),
         subtotal: t.subtotal, discount: t.discount, tax_percent: t.taxPercent, tax_amount: t.taxAmount, payable: t.payable,
         amount_words: words, notes: n.notes, with_stamp: stampOk ? 1 : 0, stamp_file: stampOk ? s.stamp_file : null,
-        status: final ? 'final' : 'draft', doc_type: n.doc_type, pay_json: JSON.stringify(payList(n.pay, existing?.pay_json, s)),
+        status: final ? 'final' : 'draft', doc_type: n.doc_type, pay_json: JSON.stringify(payList(n.pay, existing?.pay_json)),
         seller_json: final ? (existing?.seller_json || JSON.stringify(sellerSnapshot(s))) : null,
         finalized_at: final ? (existing?.finalized_at || now) : null, updated_at: now,
       };
@@ -340,7 +375,7 @@ export function createApp(dataDir) {
     return {
       number: inv.number, jdate: inv.jdate, company_title: seller.company_title,
       invoice_title: inv.doc_type === 'invoice' ? (seller.title_sale || s.invoice_title_sale) : (seller.title_proforma || seller.invoice_title || s.invoice_title),
-      pay: inv.pay_json ? JSON.parse(inv.pay_json) : [],
+      pay: parsePay(inv.pay_json).lines,
       seller: { name: seller.name, national_id: seller.national_id, phone: seller.phone, address: seller.address },
       buyer: { name: inv.buyer_name, national_id: inv.buyer_national_id, phone: inv.buyer_phone, address: inv.buyer_address, reg_no: inv.buyer_reg_no },
       items: inv.items.map((i) => ({ code: i.product_code, description: i.description, qty: i.qty, unit: i.unit, unit_price: i.unit_price, line_total: i.line_total, remark: i.remark })),
@@ -468,7 +503,7 @@ export function createApp(dataDir) {
     const stampFile = n.with_stamp ? s.stamp_file : null;
     const number = req.body?.number ? Number(toEnDigits(req.body.number)) : nextNumber();
     const inv = {
-      number, jdate: n.jdate, doc_type: n.doc_type, pay_json: JSON.stringify(payList(n.pay, null, s)), buyer_name: n.buyer.name, buyer_national_id: n.buyer.national_id, buyer_phone: n.buyer.phone,
+      number, jdate: n.jdate, doc_type: n.doc_type, pay_json: JSON.stringify(payList(n.pay, null)), buyer_name: n.buyer.name, buyer_national_id: n.buyer.national_id, buyer_phone: n.buyer.phone,
       buyer_address: n.buyer.address, buyer_reg_no: n.buyer.reg_no, items: n.items.map((i) => ({ ...i, product_code: i.code })),
       subtotal: n.totals.subtotal, discount: n.totals.discount, tax_percent: n.totals.taxPercent, tax_amount: n.totals.taxAmount,
       payable: n.totals.payable, amount_words: amountToWords(n.totals.payable), notes: n.notes, with_stamp: !!stampFile, stamp_file: stampFile,

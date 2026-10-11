@@ -2,40 +2,15 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const SEED_PRODUCTS = [
-  ['101', 'رانر تکی ۶ متری', 'عدد', 32000000],
-  ['102', 'رانر دوبل ۶ متری', 'عدد', 69000000],
-  ['103', 'نبشی فلزی نمره ۵', 'عدد', 410000],
-  ['201', 'براکت آلومینیومی ۵×۷ سانتی‌متر', 'عدد', 1380000],
-  ['202', 'کلیپس', 'عدد', 390000],
-  ['203', 'ضرب‌گیر', 'عدد', 69000],
-  ['301', 'پیچ M10×30', 'عدد', 77000],
-  ['302', 'پیچ M8×30', 'عدد', 44000],
-  ['303', 'پیچ سرمته واشر‌دار', 'عدد', 25000],
-  ['401', 'رزین و کبالت', 'گالن', 1500000000],
-  ['501', 'توری درجه ۱', 'متر', 1520000],
-  ['502', 'توری درجه ۲', 'متر', 1330000],
-];
-
-// کالاهای تازه از روی فاکتورهای قبلی (یک بار به دیتابیس‌های موجود هم اضافه می‌شود)
-export const SEED_V2 = [
-  ['104', 'پروفیل سه‌تیکه ادان ۶ متری', 'شاخه', 83000000],
-  ['601', 'فوم ۲ میلی‌متر، عرض ۵ سانتی‌متر', 'متر طول', 370000],
-];
-
 export const DEFAULT_SETTINGS = {
-  company_title: 'گروه تولیدی پایتخت',
+  company_title: '',
   invoice_title: 'پیش‌فاکتور فروش کالا و خدمات',
   invoice_title_sale: 'فاکتور فروش کالا و خدمات',
-  card_number: '',
-  sheba: '',
-  account_number: '',
-  account_holder: '',
-  seller_name: 'حسینعلی ملکی',
-  seller_national_id: '0859041816',
+  seller_name: '',
+  seller_national_id: '',
   seller_phone: '',
-  seller_address: 'مشهد، کیلومتر ۲۰ جاده قوچان، جنب پارک علم و فناوری، خیابان دوم غربی، سمت راست',
-  last_invoice_number: '169430', // شماره آخرین فاکتور صادرشده؛ فاکتور بعدی = این عدد + ۱
+  seller_address: '',
+  last_invoice_number: '0', // شماره آخرین فاکتور صادرشده؛ فاکتور بعدی = این عدد + ۱
   default_tax_percent: '0',
   validity_hours: '24',
   default_notes: 'مدت اعتبار این پیش‌فاکتور ۲۴ ساعت از تاریخ صدور است.',
@@ -79,6 +54,10 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   unit TEXT NOT NULL, unit_price INTEGER NOT NULL, list_price INTEGER NOT NULL, line_total INTEGER NOT NULL,
   remark TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS payment_accounts (
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, holder TEXT NOT NULL DEFAULT '', card TEXT NOT NULL DEFAULT '',
+  sheba TEXT NOT NULL DEFAULT '', account TEXT NOT NULL DEFAULT ''
+);
 CREATE INDEX IF NOT EXISTS idx_items_invoice ON invoice_items(invoice_id, position);
 CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(jdate);
 `;
@@ -94,14 +73,13 @@ export function openDb(dataDir) {
   if (!cols.includes('pay_json')) db.exec('ALTER TABLE invoices ADD COLUMN pay_json TEXT');
   const ins = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
-  if (db.prepare('SELECT COUNT(*) c FROM products').get().c === 0) {
-    const p = db.prepare('INSERT INTO products(code,description,unit,price) VALUES (?,?,?,?)');
-    for (const r of SEED_PRODUCTS) p.run(...r);
-  }
-  if (!db.prepare("SELECT 1 FROM settings WHERE key='seed_v2'").get()) {
-    const p = db.prepare('INSERT OR IGNORE INTO products(code,description,unit,price) VALUES (?,?,?,?)');
-    for (const r of SEED_V2) p.run(...r);
-    db.prepare("INSERT INTO settings(key,value) VALUES ('seed_v2','1')").run();
+  // انتقال شماره کارت/شبای قدیمی تنظیمات به فهرست حساب‌ها (فقط یک بار، اگر فهرست خالی است)
+  if (db.prepare('SELECT COUNT(*) c FROM payment_accounts').get().c === 0) {
+    const old = Object.fromEntries(db.prepare("SELECT key,value FROM settings WHERE key IN ('card_number','sheba','account_number','account_holder')").all().map((r) => [r.key, r.value]));
+    if (old.card_number || old.sheba || old.account_number) {
+      db.prepare('INSERT INTO payment_accounts(title,holder,card,sheba,account) VALUES (?,?,?,?,?)')
+        .run('حساب اصلی', old.account_holder || '', old.card_number || '', old.sheba || '', old.account_number || '');
+    }
   }
   return db;
 }

@@ -1,6 +1,6 @@
 {
   "name": "factormaker",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "پنل صدور پیش‌فاکتور فروش",
   "type": "module",
   "private": true,

@@ -1,5 +1,5 @@
 import { get, put, post, del } from '../api.js';
-import { h, toast, bindNumber, numValue, setNum, bindDigitsText, digitsValue, download } from '../ui.js';
+import { h, toast, modal, confirmBox, bindNumber, numValue, setNum, bindDigitsText, digitsValue, download } from '../ui.js';
 import { toFaDigits } from '/shared/format.js';
 
 export async function settingsPage(root) {
@@ -10,10 +10,6 @@ export async function settingsPage(root) {
     company_title: h('input', { value: s.company_title }),
     invoice_title: h('input', { value: s.invoice_title }),
     invoice_title_sale: h('input', { value: s.invoice_title_sale }),
-    card_number: bindDigitsText(h('input', { value: toFaDigits(s.card_number) })),
-    sheba: bindDigitsText(h('input', { value: toFaDigits(s.sheba), placeholder: 'IR...' })),
-    account_number: bindDigitsText(h('input', { value: toFaDigits(s.account_number) })),
-    account_holder: h('input', { value: s.account_holder }),
     seller_name: h('input', { value: s.seller_name }),
     seller_national_id: bindDigitsText(h('input', { value: toFaDigits(s.seller_national_id) })),
     seller_phone: bindDigitsText(h('input', { value: toFaDigits(s.seller_phone) })),
@@ -33,7 +29,7 @@ export async function settingsPage(root) {
     try {
       await put('/api/settings', {
         company_title: f.company_title.value, invoice_title: f.invoice_title.value, invoice_title_sale: f.invoice_title_sale.value,
-        card_number: digitsValue(f.card_number), sheba: digitsValue(f.sheba), account_number: digitsValue(f.account_number), account_holder: f.account_holder.value, seller_name: f.seller_name.value,
+        seller_name: f.seller_name.value,
         seller_national_id: digitsValue(f.seller_national_id), seller_phone: digitsValue(f.seller_phone), seller_address: f.seller_address.value,
         last_invoice_number: numValue(f.last_invoice_number), default_tax_percent: numValue(f.default_tax_percent) ?? 0,
         validity_hours: numValue(f.validity_hours) ?? 24, default_notes: f.default_notes.value,
@@ -63,6 +59,45 @@ export async function settingsPage(root) {
   }
   paintStamp(s.has_stamp);
 
+  // ---------- حساب‌های بانکی ----------
+  const accBody = h('tbody');
+  async function loadAccounts() {
+    const rows = await get('/api/payment-accounts');
+    accBody.replaceChildren(...(rows.length ? rows.map((a) => h('tr', {},
+      h('td', {}, a.title), h('td', {}, a.holder),
+      h('td', { class: 'num' }, toFaDigits(a.card.replace(/(\d{4})(?=\d)/g, '$1-'))),
+      h('td', { class: 'num' }, toFaDigits(a.sheba)), h('td', { class: 'num' }, toFaDigits(a.account)),
+      h('td', { style: 'white-space:nowrap' },
+        h('button', { class: 'btn small', onclick: () => editAccount(a) }, 'ویرایش'), ' ',
+        h('button', { class: 'btn small danger', onclick: async () => { if (await confirmBox(`حساب «${a.title}» حذف شود؟ (فاکتورهای قبلی تغییری نمی‌کنند.)`, 'حذف')) { await del('/api/payment-accounts/' + a.id); loadAccounts(); } } }, 'حذف'))))
+      : [h('tr', {}, h('td', { colspan: 6, class: 'muted' }, 'هنوز حسابی ثبت نشده است.'))]));
+  }
+  function editAccount(a) {
+    const f2 = {
+      title: h('input', { value: a?.title || '', placeholder: 'مثلاً: حساب اصلی، حساب شرکت' }), holder: h('input', { value: a?.holder || '' }),
+      card: bindDigitsText(h('input', { value: toFaDigits(a?.card || ''), placeholder: '۱۶ رقم' })),
+      sheba: bindDigitsText(h('input', { value: toFaDigits(a?.sheba || ''), placeholder: 'IR + ۲۴ رقم' })),
+      account: bindDigitsText(h('input', { value: toFaDigits(a?.account || '') })),
+    };
+    const err = h('div', { class: 'err' });
+    const m = modal(a ? 'ویرایش حساب' : 'حساب جدید', h('div', {},
+      h('div', { class: 'row' }, fld('عنوان حساب', f2.title), fld('نام صاحب حساب', f2.holder)),
+      h('div', { class: 'row', style: 'margin-top:10px' }, fld('شماره کارت', f2.card), fld('شماره شبا', f2.sheba), fld('شماره حساب', f2.account)), err,
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn primary', onclick: async () => {
+          const body = { title: f2.title.value, holder: f2.holder.value, card: digitsValue(f2.card), sheba: digitsValue(f2.sheba), account: digitsValue(f2.account) };
+          try { if (a) await put('/api/payment-accounts/' + a.id, body); else await post('/api/payment-accounts', body); m.close(); toast('ذخیره شد', 'ok'); loadAccounts(); } catch (e) { err.textContent = e.message; }
+        } }, 'ذخیره'),
+        h('button', { class: 'btn', onclick: () => m.close() }, 'انصراف'))));
+    f2.title.focus();
+  }
+  const accountsCard = h('div', { class: 'card' },
+    h('div', { class: 'row', style: 'align-items:center;margin-bottom:8px' }, h('h2', { style: 'margin:0;flex:1' }, 'حساب‌های بانکی (کارت / شبا)'),
+      h('button', { class: 'btn primary', onclick: () => editAccount(null) }, '+ حساب جدید')),
+    h('p', { class: 'muted', style: 'margin:0 0 8px' }, 'هر چند حساب بخواهید ثبت کنید؛ در فرم هر فاکتور انتخاب می‌کنید کدام حساب (و کدام شماره‌ها) چاپ شود.'),
+    h('div', { class: 'tablewrap' }, h('table', { class: 'grid' }, h('thead', {}, h('tr', {}, ['عنوان', 'صاحب حساب', 'شماره کارت', 'شماره شبا', 'شماره حساب', ''].map((t) => h('th', {}, t)))), accBody)));
+  loadAccounts();
+
   // تغییر رمز
   const op = h('input', { type: 'password' }); const np = h('input', { type: 'password' });
   root.append(h('div', { class: 'wrap' },
@@ -71,9 +106,6 @@ export async function settingsPage(root) {
       h('div', { class: 'row' }, fld('عنوان شرکت (سربرگ)', f.company_title), fld('عنوان پیش‌فاکتور', f.invoice_title), fld('عنوان فاکتور', f.invoice_title_sale)),
       h('div', { class: 'row', style: 'margin-top:10px' }, fld('نام فروشنده', f.seller_name), fld('شناسه ملی', f.seller_national_id), fld('تلفن', f.seller_phone)),
       h('div', { style: 'margin-top:10px' }, fld('نشانی فروشنده', f.seller_address)),
-      h('h2', { style: 'margin-top:20px' }, 'اطلاعات پرداخت (کارت / شبا / حساب)'),
-      h('p', { class: 'muted', style: 'margin:0 0 8px' }, 'اینجا ثبت کنید؛ در هر فاکتور می‌توانید انتخاب کنید کدام‌ها در چاپ بیایند.'),
-      h('div', { class: 'row' }, fld('شماره کارت', f.card_number), fld('شماره شبا', f.sheba), fld('شماره حساب', f.account_number), fld('نام صاحب حساب', f.account_holder)),
       h('h2', { style: 'margin-top:20px' }, 'شماره‌گذاری، مالیات و توضیحات'),
       h('div', { class: 'row' },
         fld('شماره آخرین فاکتور صادرشده', f.last_invoice_number, 'فاکتور بعدی یک عدد بیشتر خواهد بود.'),
@@ -81,6 +113,7 @@ export async function settingsPage(root) {
       h('div', { style: 'margin-top:10px' }, fld('متن پیش‌فرض توضیحات', f.default_notes), h('div', { style: 'margin-top:6px' }, applyValidity)),
       h('div', { style: 'margin-top:12px' }, h('label', {}, f.show_code, ' نمایش ستون «کد کالا» در نسخه چاپی/PDF')),
       h('div', { class: 'btnbar' }, h('button', { class: 'btn primary', onclick: save }, 'ذخیره تنظیمات'))),
+    accountsCard,
     h('div', { class: 'card' }, h('h2', {}, 'تصویر مهر شرکت'),
       h('p', { class: 'muted' }, 'فایل PNG با پس‌زمینه شفاف بارگذاری کنید.'), stampBox,
       h('div', { style: 'margin-top:10px' }, h('label', {}, f.stamp_in_pdf, ' درج مهر در PDF (پیش‌فرض برای فاکتورهای جدید)')),

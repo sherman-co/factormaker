@@ -5,8 +5,8 @@ import { formatNumber, toFaDigits, toEnDigits, calcTotals, lineTotal, amountToWo
 
 export async function invoicePage(root, idParam) {
   const isNew = idParam === 'new';
-  const [settings, products, today, nextNo] = await Promise.all([
-    get('/api/settings'), get('/api/products'), get('/api/today'), isNew ? get('/api/invoices/next-number') : null,
+  const [settings, products, today, nextNo, accounts] = await Promise.all([
+    get('/api/settings'), get('/api/products'), get('/api/today'), isNew ? get('/api/invoices/next-number') : null, get('/api/payment-accounts'),
   ]);
   let inv = null;
   let srcId = null;
@@ -14,7 +14,8 @@ export async function invoicePage(root, idParam) {
   const readonly = false;
   const isFinal = inv?.status === 'final';
   let docType = inv?.doc_type || 'proforma';
-  const savedPay = inv?.pay_json ? JSON.parse(inv.pay_json) : null;
+  const savedPayRaw = inv?.pay_json ? JSON.parse(inv.pay_json) : null;
+  const savedPay = savedPayRaw && (Array.isArray(savedPayRaw) ? { account_id: null, lines: savedPayRaw } : savedPayRaw);
   const byCode = new Map(products.map((p) => [p.code, p]));
   const storedByCode = new Map((inv?.status === 'final' ? inv.items : []).map((i) => [i.product_code, { description: i.description, unit: i.unit, list_price: i.list_price, price: i.price, active: true }]));
   const activeProducts = products.filter((p) => p.active);
@@ -43,12 +44,27 @@ export async function invoicePage(root, idParam) {
   const notes = h('textarea', { rows: 2, disabled: readonly });
   const withStamp = h('input', { type: 'checkbox', disabled: readonly, checked: inv ? !!inv.with_stamp : settings.stamp_in_pdf === '1' && settings.has_stamp });
   const payChecks = {};
-  const PAYS = [['card', 'شماره کارت', settings.card_number], ['sheba', 'شماره شبا', settings.sheba], ['account', 'شماره حساب', settings.account_number]];
-  for (const [k, , v] of PAYS) payChecks[k] = h('input', { type: 'checkbox', disabled: !v, checked: !!v && (savedPay ? savedPay.some((x) => x.key === k) : false) });
+  const PAYS = [['card', 'شماره کارت'], ['sheba', 'شماره شبا'], ['account', 'شماره حساب']];
+  const accSel = h('select', { onchange: () => paintPay() },
+    h('option', { value: '' }, 'بدون درج اطلاعات پرداخت'),
+    accounts.map((a) => h('option', { value: a.id, selected: savedPay?.account_id === a.id }, a.title + (a.holder ? ` — ${a.holder}` : ''))));
+  const payOpts = h('div', { class: 'payopts' });
+  for (const [k] of PAYS) payChecks[k] = h('input', { type: 'checkbox', checked: !!savedPay?.lines?.some((x) => x.key === k) });
+  function paintPay() {
+    const acc = accounts.find((a) => String(a.id) === accSel.value);
+    payOpts.replaceChildren(...(acc ? PAYS.map(([k, l]) => {
+      const has = !!acc[k === 'card' ? 'card' : k === 'sheba' ? 'sheba' : 'account'];
+      if (!has) payChecks[k].checked = false;
+      else if (!payChecks[k]._touched && !savedPay?.lines?.length) payChecks[k].checked = true;
+      payChecks[k].disabled = !has;
+      payChecks[k].onchange = () => { payChecks[k]._touched = true; };
+      return h('label', { style: has ? '' : 'color:var(--muted)', title: has ? '' : 'برای این حساب ثبت نشده' }, payChecks[k], ' ', l);
+    }) : []));
+  }
   const payBox = h('div', {}, h('b', {}, 'درج اطلاعات پرداخت در فاکتور'),
-    PAYS.some(([, , v]) => v)
-      ? h('div', { class: 'payopts' }, PAYS.map(([k, l, v]) => h('label', { style: v ? '' : 'color:var(--muted)', title: v ? '' : 'ابتدا در تنظیمات وارد کنید' }, payChecks[k], ' ', l)))
-      : h('div', { class: 'muted', style: 'margin-top:6px' }, 'شماره کارت/شبا را در «تنظیمات» وارد کنید تا اینجا قابل انتخاب شود.'),
+    accounts.length
+      ? h('div', { style: 'margin-top:6px' }, accSel, payOpts)
+      : h('div', { class: 'muted', style: 'margin-top:6px' }, 'ابتدا در «تنظیمات ← حساب‌های بانکی» یک حساب ثبت کنید.'),
     h('div', { class: 'muted', style: 'font-size:12px;margin-top:4px' }, 'در چاپ، کادر توضیحات نصف می‌شود و این اطلاعات کنار آن می‌آید.'));
   const subtotalEl = h('b'); const taxAmtEl = h('b'); const payEl = h('b'); const wordsEl = h('div', { style: 'font-weight:700;line-height:1.9' });
   const taxAmtRow = h('div', { class: 'trow' }, h('span', {}, 'مبلغ مالیات'), taxAmtEl);
@@ -168,7 +184,7 @@ export async function invoicePage(root, idParam) {
   // ---------- ارسال ----------
   function payload(extra = {}) {
     return {
-      jdate: dp.get(), customer_id: customerId, doc_type: docType, pay: Object.fromEntries(Object.entries(payChecks).map(([k, c]) => [k, c.checked])), with_stamp: withStamp.checked, notes: notes.value,
+      jdate: dp.get(), customer_id: customerId, doc_type: docType, pay: { account_id: accSel.value || null, ...Object.fromEntries(Object.entries(payChecks).map(([k, c]) => [k, c.checked])) }, with_stamp: withStamp.checked, notes: notes.value,
       buyer: { name: buyer.name.value, national_id: digitsValue(buyer.national_id), phone: digitsValue(buyer.phone), address: buyer.address.value, reg_no: digitsValue(buyer.reg_no) },
       discount: numValue(discount) ?? 0, tax_percent: numValue(taxPct) ?? 0,
       items: rows.map((r) => ({ code: r.getCode(), qty: r.getQty() ?? '', unit_price: r.getPrice() ?? '', remark: r.remark })),
@@ -240,6 +256,7 @@ export async function invoicePage(root, idParam) {
   const sellerLine = inv?.seller || { name: settings.seller_name, national_id: settings.seller_national_id, phone: settings.seller_phone, address: settings.seller_address };
 
   root.append(h('div', { class: 'wrap' },
+    !settings.seller_name ? h('div', { class: 'banner draft' }, 'مشخصات فروشنده هنوز ثبت نشده است. ', h('a', { href: '#/settings' }, 'از تنظیمات وارد کنید.')) : null,
     isFinal ? h('div', { class: 'banner' }, `✔ نهایی‌شده در ${toFaDigits(todayJalali(new Date(inv.finalized_at)))} — هر تغییری که ذخیره کنید، PDF دوباره ساخته می‌شود.`)
       : inv ? h('div', { class: 'banner draft' }, 'پیش‌نویس — هنوز نهایی نشده است.') : null,
     h('div', { class: 'card' },
@@ -270,6 +287,7 @@ export async function invoicePage(root, idParam) {
           h('div', { class: 'trow pay' }, h('span', {}, 'مبلغ قابل پرداخت (ریال)'), payEl))),
       h('div', { class: 'btnbar' }, isFinal ? [btnSaveFinal, btnToDraft] : [btnDraft, btnFinal], btnPreview, btnPdf, btnCopy, btnDel))));
   paintDoc();
+  paintPay();
   recalc();
   if (isNew) rows[0].codeEl.focus();
 }
