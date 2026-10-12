@@ -1,10 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ROOT, firstExisting } from './paths.js';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-export const FONTS_DIR = path.join(root, 'fonts');
-const VAZIR_DIR = path.join(root, 'node_modules', 'vazirmatn', 'fonts', 'webfonts');
+export const FONTS_DIR = path.join(ROOT, 'fonts');
+export const VAZIR_FILE = firstExisting(path.join(ROOT, 'vendor', 'Vazirmatn[wght].woff2'), path.join(ROOT, 'node_modules', 'vazirmatn', 'fonts', 'webfonts', 'Vazirmatn[wght].woff2'));
 const MIME = { '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf' };
 const FMT = { '.woff2': 'woff2', '.woff': 'woff', '.ttf': 'truetype', '.otf': 'opentype' };
 
@@ -36,13 +35,11 @@ export function fontCss({ embed = false } = {}) {
   if (normal.length) css += `@font-face{font-family:"B Yekan";font-weight:400;src:${normal.map((f) => src(f, f.url)).join(',')};}\n`;
   if (bold.length) css += `@font-face{font-family:"B Yekan";font-weight:700;src:${bold.map((f) => src(f, f.url)).join(',')};}\n`;
   else if (normal.length) css += `@font-face{font-family:"B Yekan";font-weight:700;src:${normal.map((f) => src(f, f.url)).join(',')};}\n`;
-  const vf = path.join(VAZIR_DIR, 'Vazirmatn[wght].woff2');
-  if (fs.existsSync(vf)) {
-    const f = { file: vf, ext: '.woff2' };
+  if (fs.existsSync(VAZIR_FILE)) {
+    const f = { file: VAZIR_FILE, ext: '.woff2' };
     css += `@font-face{font-family:"Vazirmatn";font-weight:100 900;src:${src(f, '/vendor/vazirmatn.woff2')};}\n`;
   }
   return css;
 }
 
 export const FONT_STACK = '"B Yekan","Vazirmatn",Tahoma,sans-serif';
-export const VAZIR_FILE = path.join(VAZIR_DIR, 'Vazirmatn[wght].woff2');

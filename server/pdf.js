@@ -16,6 +16,7 @@ function findChrome() {
     ...(fs.existsSync('/opt/pw-browsers') ? fs.readdirSync('/opt/pw-browsers').filter((d) => d.startsWith('chromium-')).map((d) => `/opt/pw-browsers/${d}/chrome-linux/chrome`) : []),
     '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -28,7 +29,7 @@ function getBrowser() {
     const exe = findChrome();
     const args = ['--font-render-hinting=none'];
     if (process.getuid && process.getuid() === 0) args.push('--no-sandbox', '--disable-setuid-sandbox');
-    browserPromise = puppeteer.launch({ headless: true, executablePath: exe, args }).catch((e) => {
+    browserPromise = puppeteer.launch({ headless: true, executablePath: exe, args, handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false }).catch((e) => {
       browserPromise = null;
       throw new Error('اجرای مرورگر برای ساخت PDF ممکن نشد: ' + e.message);
     });
@@ -49,5 +50,11 @@ export async function htmlToPdf(html) {
 }
 
 export async function closeBrowser() {
-  if (browserPromise) { const b = await browserPromise.catch(() => null); browserPromise = null; await b?.close(); }
+  if (!browserPromise) return;
+  const b = await browserPromise.catch(() => null);
+  browserPromise = null;
+  if (!b) return;
+  // بستن نرم با مهلت کوتاه؛ اگر نشد، پروسه‌ی مرورگر کشته می‌شود تا خروج برنامه معطل نماند
+  await Promise.race([b.close().catch(() => {}), new Promise((r) => setTimeout(r, 600))]);
+  try { b.process()?.kill('SIGKILL'); } catch { /* already closed */ }
 }

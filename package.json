@@ -1,6 +1,6 @@
 {
   "name": "factormaker",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "پنل صدور پیش‌فاکتور فروش",
   "type": "module",
   "private": true,
@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "node --test --test-concurrency=1 tests/*.test.js",
-    "backup": "node scripts/backup.js"
+    "backup": "node scripts/backup.js",
+    "build:exe": "node scripts/build-exe.mjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",
@@ -18,5 +19,9 @@
     "jalaali-js": "^2.0.1",
     "puppeteer": "^25.13.0",
     "vazirmatn": "^33.0.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6"
   }
 }

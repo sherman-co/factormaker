@@ -1,7 +1,7 @@
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { ROOT, firstExisting } from './paths.js';
 import ExcelJS from 'exceljs';
 import { openDb, tx, getSettings, DEFAULT_SETTINGS } from './db.js';
 import { ensureAdmin, login, logout, userFromToken, parseCookies, setPassword, hashPw } from './auth.js';
@@ -11,9 +11,9 @@ import { FONTS_DIR, VAZIR_FILE, fontCss } from './fonts.js';
 import { toEnDigits, parseNumber, normalizeText, calcTotals, lineTotal, amountToWords, groupOfCode } from '../shared/format.js';
 import { todayJalali, isValidJalaliString } from '../shared/jdate.js';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const root = ROOT;
 const COOKIE = 'fm_session';
-const VERSION = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const VERSION = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; } catch { return ''; } })();
 
 class HttpError extends Error {
   constructor(status, message, extra) { super(message); this.status = status; this.extra = extra; }
@@ -37,7 +37,7 @@ export function createApp(dataDir) {
   app.use('/fonts', express.static(FONTS_DIR));
   app.get('/fonts.css', (_q, r) => r.type('css').send(fontCss()));
   app.get('/vendor/vazirmatn.woff2', (_q, r) => r.sendFile(VAZIR_FILE));
-  app.get('/vendor/jalaali.js', (_q, r) => r.sendFile(path.join(root, 'node_modules/jalaali-js/dist/index.js')));
+  app.get('/vendor/jalaali.js', (_q, r) => r.sendFile(firstExisting(path.join(root, 'vendor', 'jalaali.js'), path.join(root, 'node_modules/jalaali-js/dist/index.js'))));
   app.use('/shared', express.static(path.join(root, 'shared')));
   app.use(express.static(path.join(root, 'public')));
 

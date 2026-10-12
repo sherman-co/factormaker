@@ -1,0 +1,49 @@
+name: Release (Windows exe)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        run: npm ci
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+      - name: Build exe
+        run: node scripts/build-exe.mjs
+      - name: Smoke test the exe
+        shell: pwsh
+        run: |
+          $env:PORT = '3199'
+          $env:ADMIN_PASSWORD = 'smoke-pass-1'
+          $env:OPEN_BROWSER = '0'
+          $p = Start-Process -FilePath "release/FactorMaker/FactorMaker.exe" -WorkingDirectory "release/FactorMaker" -PassThru
+          try { node scripts/smoke.mjs http://127.0.0.1:3199 smoke-pass-1; if ($LASTEXITCODE -ne 0) { throw "smoke failed" } }
+          finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+      - name: Package
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force release/FactorMaker/data -ErrorAction SilentlyContinue
+          Compress-Archive -Path release/FactorMaker -DestinationPath FactorMaker-win-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FactorMaker-win-x64
+          path: FactorMaker-win-x64.zip
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" FactorMaker-win-x64.zip --title "FactorMaker ${{ github.ref_name }}" --notes "نسخه‌ی اجرایی ویندوز: فایل zip را باز کنید و FactorMaker.exe را اجرا کنید. راهنما: README.txt داخل zip. ساخت PDF به Chrome یا Edge نیاز دارد."
