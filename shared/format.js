@@ -104,14 +104,19 @@ export function calcTotals(items, discount = 0, taxPercent = 0) {
 }
 
 // ---------- کدها ----------
-export const GROUPS = { 1: 'پروفیل‌ها', 2: 'اتصالات', 3: 'پیچ‌ها', 4: 'مواد شیمیایی', 5: 'توری‌ها', 6: 'فوم و عایق‌ها' };
+export const DEFAULT_GROUPS = { 100: 'پروفیل‌ها', 200: 'اتصالات', 300: 'پیچ‌ها', 400: 'مواد شیمیایی', 500: 'توری‌ها', 600: 'فوم و عایق‌ها' };
 
-/** گروه از روی رقم صدگان کد. */
-export function groupOfCode(code) {
+/** کد گروه از روی رقم صدگان: ۳۰۲ ← ۳۰۰، ۱۰۵۰ ← ۱۰۰۰. */
+export function groupKey(code) {
   const n = Number(toEnDigits(code));
-  if (!Number.isFinite(n)) return 'سایر';
-  const h = Math.floor(n / 100);
-  return GROUPS[h] ? `${toFaDigits(h * 100)} - ${GROUPS[h]}` : 'سایر';
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n / 100) * 100 : null;
+}
+
+/** نام نمایشی گروه؛ groups = {300:'پیچ‌ها'}. اگر گروهی تعریف نشده باشد «متفرقه». */
+export function groupOfCode(code, groups = DEFAULT_GROUPS) {
+  const k = groupKey(code);
+  const name = k != null ? groups[k] : null;
+  return name ? `${toFaDigits(k)} - ${name}` : 'متفرقه';
 }
 
 /** نگارش یکدست: × به‌جای x بین ارقام، M بزرگ در پیچ. */

@@ -4,9 +4,8 @@ import { toFaDigits } from '/shared/format.js';
 
 const PRESETS = ['#16314f', '#0f766e', '#1d4ed8', '#7c3aed', '#b45309', '#be123c', '#374151', '#e5e7eb'];
 const PLATFORMS = [
-  { key: 'tg', name: 'تلگرام', hint: 'ساخت ربات: @BotFather. شناسه‌ی چت عددی یا @کانال. ربات باید عضو چت/کانال باشد.', base: 'https://api.telegram.org' },
-  { key: 'bale', name: 'بله', hint: 'ساخت ربات: @botfather در بله. ربات را به چت/کانال اضافه کنید.', base: 'https://tapi.bale.ai' },
-  { key: 'eitaa', name: 'ایتا', hint: 'از «ایتایار» (eitaayar.ir) توکن بگیرید؛ مقصد معمولاً یک کانال است (@شناسه). طبق مستندات ایتایار پیاده‌سازی شده و روی حساب واقعی آزمایش نشده؛ از دکمه‌ی «ارسال آزمایشی» استفاده کنید.', base: 'https://eitaayar.ir/api' },
+  { key: 'tg', api: 'telegram', name: 'تلگرام', hint: 'ساخت ربات: @BotFather. شناسه‌ی چت عددی یا @کانال؛ ربات باید عضو چت/کانال باشد. در ایران معمولاً به پروکسی نیاز دارد.', base: 'https://api.telegram.org' },
+  { key: 'bale', api: 'bale', name: 'بله', hint: 'ساخت ربات: @botfather در بله. ربات را به چت/کانال اضافه کنید. معمولاً بدون پروکسی کار می‌کند.', base: 'https://tapi.bale.ai' },
 ];
 
 /** کارت‌های ظاهر، اشتراک‌گذاری و به‌روزرسانی. خروجی: {cards, collect()} */
@@ -44,25 +43,31 @@ export function buildExtraSettings(s, { version, onSaved }) {
       token: h('input', { type: 'password', autocomplete: 'off', placeholder: s[`${p.key}_has_token`] ? '•••••• (ثبت شده؛ برای تغییر، توکن جدید بنویسید)' : 'توکن ربات' }),
       chat: h('input', { value: s[`${p.key}_chat`] || '', placeholder: 'مثلاً 123456789 یا @channel (چند مقصد با ویرگول)', class: 'num' }),
       base: h('input', { value: s[`${p.key}_base`] || '', placeholder: p.base, class: 'num' }),
+      proxy: h('input', { type: 'checkbox', checked: s[`${p.key}_use_proxy`] === '1' }),
     };
     return h('div', { class: 'pf' }, h('h3', {}, h('label', {}, f.enabled, ' ' + p.name)),
       h('div', { class: 'field' }, h('label', {}, 'توکن ربات'), f.token),
       h('div', { class: 'field', style: 'margin-top:8px' }, h('label', {}, 'شناسه‌ی چت / کانال'), f.chat),
       h('div', { class: 'field', style: 'margin-top:8px' }, h('label', {}, 'آدرس API (اختیاری؛ برای پروکسی/آینه)'), f.base),
+      h('label', { style: 'display:block;margin-top:10px' }, f.proxy, ' ارسال از طریق پروکسی (بالا تعریف می‌شود)'),
       h('p', { class: 'muted', style: 'font-size:12px;margin:8px 0' }, p.hint),
       h('button', { class: 'btn small', onclick: async (e) => {
         e.target.disabled = true;
         try {
           await onSaved(true); // اول ذخیره‌ی همین مقادیر
-          const r = (await post('/api/share/test', { platform: p.key === 'tg' ? 'telegram' : p.key })).results[0];
+          const r = (await post('/api/share/test', { platform: p.api })).results[0];
           toast(`${r.label}: ${r.ok ? 'پیام آزمایشی ارسال شد' : r.error}`, r.ok ? 'ok' : 'error');
         } catch (er) { toast(er.message, 'error'); }
         e.target.disabled = false;
       } }, 'ذخیره و ارسال آزمایشی'));
   });
-  const share = h('div', { class: 'card' }, h('h2', {}, 'اشتراک‌گذاری (تلگرام / بله / ایتا)'),
+  const proxy = h('input', { value: s.proxy_url || '', placeholder: 'http://127.0.0.1:10809   یا   socks5://127.0.0.1:10808', class: 'num' });
+  const share = h('div', { class: 'card' }, h('h2', {}, 'اشتراک‌گذاری (تلگرام / بله)'),
     h('p', { class: 'muted', style: 'margin:0 0 10px' }, 'با دکمه‌ی «ارسال» در فاکتورها، بایگانی و کالاها، فایل از طریق ربات‌های زیر فرستاده می‌شود. توکن‌ها فقط روی همین کامپیوتر ذخیره می‌شوند و به مرورگر برنمی‌گردند. اگر تلگرام از اینترنت شما بسته است، آدرس API یک پروکسی/آینه بگذارید.'),
-    h('div', { class: 'grid2' }, cards));
+    h('div', { class: 'field', style: 'margin-bottom:12px' }, h('label', {}, 'آدرس پروکسی (اختیاری)'), proxy,
+      h('small', { class: 'muted' }, 'اگر از v2rayN/Clash/Nekoray و مشابه استفاده می‌کنید، آدرس پورت محلی آن را بنویسید: پورت HTTP (مثلاً http://127.0.0.1:10809) یا SOCKS (مثلاً socks5://127.0.0.1:10808). فقط برای پلتفرم‌هایی که «ارسال از طریق پروکسی» را تیک زده‌اند استفاده می‌شود.')),
+    h('div', { class: 'grid2' }, cards),
+    h('p', { class: 'muted', style: 'font-size:12px;margin-bottom:0' }, 'واتساپ: ارسال خودکار پشتیبانی نمی‌شود؛ در پنجره‌ی «ارسال» گزینه‌ی واتساپ، متن آماده را باز می‌کند و فایل را دانلود می‌کند تا داخل چت بکشید.'));
 
   // ---------- به‌روزرسانی ----------
   const status = h('div', { style: 'margin-top:8px' });
@@ -94,10 +99,10 @@ export function buildExtraSettings(s, { version, onSaved }) {
     h('p', { style: 'margin:0 0 8px' }, 'نسخه‌ی فعلی: ', h('b', { style: 'direction:ltr;display:inline-block' }, version)), btn, status);
 
   function collect() {
-    const out = { theme_color: color.value, header_mode: mode.logo.checked && !mode.logo.disabled ? 'logo' : 'name' };
+    const out = { proxy_url: proxy.value.trim(), theme_color: color.value, header_mode: mode.logo.checked && !mode.logo.disabled ? 'logo' : 'name' };
     for (const p of PLATFORMS) {
       const f = pf[p.key];
-      out[`${p.key}_enabled`] = f.enabled.checked; out[`${p.key}_chat`] = f.chat.value.trim(); out[`${p.key}_base`] = f.base.value.trim();
+      out[`${p.key}_enabled`] = f.enabled.checked; out[`${p.key}_use_proxy`] = f.proxy.checked; out[`${p.key}_chat`] = f.chat.value.trim(); out[`${p.key}_base`] = f.base.value.trim();
       if (f.token.value.trim()) out[`${p.key}_token`] = f.token.value.trim();
     }
     return out;

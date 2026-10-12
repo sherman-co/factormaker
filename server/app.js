@@ -3,14 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, firstExisting } from './paths.js';
 import { buildInvoicesXlsx, buildProductsXlsx, buildProductsSample, parseProductsXlsx, XLSX_MIME } from './excel.js';
-import { shareTo, platformConfig, PLATFORMS } from './share.js';
+import { shareTo, platformConfig, PLATFORMS, parseProxy } from './share.js';
 import { checkUpdate, installUpdate } from './update.js';
 import { openDb, tx, getSettings, DEFAULT_SETTINGS } from './db.js';
 import { ensureAdmin, login, logout, userFromToken, parseCookies, setPassword, hashPw } from './auth.js';
 import { renderInvoiceHtml, stampDataUri, imageDataUri } from './print.js';
 import { htmlToPdf } from './pdf.js';
 import { FONTS_DIR, VAZIR_FILE, fontCss } from './fonts.js';
-import { toEnDigits, parseNumber, normalizeText, calcTotals, lineTotal, amountToWords, groupOfCode } from '../shared/format.js';
+import { toEnDigits, parseNumber, normalizeText, calcTotals, lineTotal, amountToWords, groupOfCode, groupKey } from '../shared/format.js';
 import { todayJalali, isValidJalaliString } from '../shared/jdate.js';
 
 const root = ROOT;
@@ -25,7 +25,6 @@ const bad = (m, extra) => new HttpError(400, m, extra);
 const clean = (s) => String(s ?? '').trim();
 const digitsText = (s) => toEnDigits(clean(s)); // شناسه ملی/تلفن: متن با ارقام انگلیسی، صفر اول حفظ
 
-const SECRET_KEYS = ['tg_token', 'bale_token', 'eitaa_token'];
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS).filter((k) => !['stamp_file', 'logo_file', 'last_invoice_number'].includes(k));
 const PAY_LABELS = { card: ['شماره کارت', 'card'], sheba: ['شماره شبا', 'sheba'], account: ['شماره حساب', 'account'] };
 
@@ -84,7 +83,10 @@ export function createApp(dataDir) {
   const publicSettings = () => {
     const s = getSettings(db);
     const out = { ...s, has_stamp: !!(s.stamp_file && fs.existsSync(path.join(dataDir, 'stamps', s.stamp_file))), has_logo: !!(s.logo_file && fs.existsSync(path.join(dataDir, 'logos', s.logo_file))) };
-    for (const k of SECRET_KEYS) { out[k.replace('_token', '_has_token')] = !!s[k]; delete out[k]; } // توکن‌ها هرگز به مرورگر برنمی‌گردند
+    for (const k of Object.keys(out)) {
+      if (/^eitaa_/.test(k)) delete out[k]; // ایتا حذف شده؛ باقی‌مانده‌ی دیتابیس‌های قدیمی نمایش داده نمی‌شود
+      else if (/_token$/.test(k)) { out[k.replace('_token', '_has_token')] = !!s[k]; delete out[k]; } // توکن‌ها هرگز به مرورگر برنمی‌گردند
+    }
     return out;
   };
   app.get('/api/settings', (_q, res) => res.json(publicSettings()));
@@ -105,8 +107,10 @@ export function createApp(dataDir) {
       if (n === null || n <= 0) throw bad('مدت اعتبار نامعتبر است');
       vals.validity_hours = String(n);
     }
-    for (const k of SECRET_KEYS) if (k in vals && !vals[k]) delete vals[k]; // خالی = بدون تغییر
-    for (const k of SECRET_KEYS) if (b['clear_' + k] === true) vals[k] = '';
+    const secretKeys = Object.keys(DEFAULT_SETTINGS).filter((k) => /_token$/.test(k));
+    for (const k of secretKeys) if (k in vals && !vals[k]) delete vals[k]; // خالی = بدون تغییر
+    for (const k of secretKeys) if (b['clear_' + k] === true) vals[k] = '';
+    if (vals.proxy_url && !parseProxy(vals.proxy_url)) throw bad('آدرس پروکسی نامعتبر است (مثال: http://127.0.0.1:10809 یا socks5://127.0.0.1:10808)');
     for (const pf of Object.values(PLATFORMS)) {
       const bk = `${pf.prefix}_base`;
       if (vals[bk] && !/^https?:\/\/[^\s]+$/i.test(vals[bk])) throw bad('آدرس API ' + pf.label + ' نامعتبر است');
@@ -115,7 +119,7 @@ export function createApp(dataDir) {
     }
     if ('theme_color' in vals && !/^#[0-9a-fA-F]{6}$/.test(vals.theme_color)) throw bad('رنگ نامعتبر است');
     if ('header_mode' in vals && !['name', 'logo'].includes(vals.header_mode)) throw bad('حالت سربرگ نامعتبر است');
-    for (const k of ['tg_enabled', 'bale_enabled', 'eitaa_enabled', 'show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
+    for (const k of ['tg_enabled', 'bale_enabled', 'tg_use_proxy', 'bale_use_proxy', 'show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
     if ('last_invoice_number' in b) {
       const n = parseNumber(b.last_invoice_number);
       if (n === null || !Number.isInteger(n) || n < 0) throw bad('شماره آخرین فاکتور نامعتبر است');
@@ -172,7 +176,8 @@ export function createApp(dataDir) {
   });
 
   // ---------- کالاها ----------
-  const productOut = (p) => ({ ...p, active: !!p.active, group: groupOfCode(p.code) });
+  const groupsMap = () => Object.fromEntries(db.prepare('SELECT code,name FROM product_groups').all().map((g) => [g.code, g.name]));
+  const productOut = (p, gm = groupsMap()) => ({ ...p, active: !!p.active, group: groupOfCode(p.code, gm), group_code: groupKey(p.code) });
   function validateProduct(b, id, skipDup = false) {
     const code = toEnDigits(clean(b.code));
     if (!/^\d{3,}$/.test(code)) throw bad('کد کالا باید عددی و حداقل ۳ رقم باشد');
@@ -191,7 +196,7 @@ export function createApp(dataDir) {
   // ورود/خروج Excel (قبل از مسیرهای :id)
   app.get('/api/products/export.xlsx', async (_q, res) => {
     const rows = db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all();
-    sendXlsx(res, await buildProductsXlsx(rows), 'کالاها.xlsx');
+    sendXlsx(res, await buildProductsXlsx(rows, groupsMap()), 'کالاها.xlsx');
   });
   app.get('/api/products/template.xlsx', async (_q, res) => sendXlsx(res, await buildProductsSample(), 'نمونه-ورود-کالا.xlsx'));
   app.post('/api/products/import', async (req, res) => {
@@ -232,10 +237,11 @@ export function createApp(dataDir) {
   });
   app.get('/api/products', (req, res) => {
     const q = toEnDigits(clean(req.query.q)).toLowerCase();
+    const gm = groupsMap();
     let rows = db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all();
     if (req.query.active === '1') rows = rows.filter((r) => r.active);
-    if (q) rows = rows.filter((r) => r.code.includes(q) || r.description.toLowerCase().includes(q) || groupOfCode(r.code).includes(q));
-    res.json(rows.map(productOut));
+    if (q) rows = rows.filter((r) => r.code.includes(q) || r.description.toLowerCase().includes(q) || groupOfCode(r.code, gm).includes(q));
+    res.json(rows.map((r) => productOut(r, gm)));
   });
   app.post('/api/products', (req, res) => {
     const p = validateProduct(req.body || {});
@@ -258,6 +264,38 @@ export function createApp(dataDir) {
     }
     db.prepare('DELETE FROM products WHERE id=?').run(p.id);
     res.json({ ok: true });
+  });
+
+  // ---------- دسته‌بندی‌ها (کد گروه) ----------
+  const groupRows = () => {
+    const counts = {};
+    for (const p of db.prepare('SELECT code FROM products').all()) { const k = groupKey(p.code); counts[k] = (counts[k] || 0) + 1; }
+    return db.prepare('SELECT code,name FROM product_groups ORDER BY code').all().map((g) => ({ ...g, count: counts[g.code] || 0 }));
+  };
+  function validateGroup(b, needCode) {
+    const name = normalizeText(b.name);
+    if (!name) throw bad('نام دسته‌بندی الزامی است');
+    if (!needCode) return { name };
+    const code = parseNumber(toEnDigits(String(b.code ?? '')));
+    if (code === null || !Number.isInteger(code) || code < 100 || code % 100 !== 0) throw bad('کد گروه باید مضرب ۱۰۰ باشد (مثلاً ۱۰۰، ۲۰۰، ۷۰۰)');
+    return { code, name };
+  }
+  app.get('/api/groups', (_q, res) => res.json(groupRows()));
+  app.post('/api/groups', (req, res) => {
+    const g = validateGroup(req.body || {}, true);
+    if (db.prepare('SELECT 1 FROM product_groups WHERE code=?').get(g.code)) throw bad('این کد گروه قبلاً تعریف شده است');
+    db.prepare('INSERT INTO product_groups(code,name) VALUES (?,?)').run(g.code, g.name);
+    res.status(201).json(groupRows());
+  });
+  app.put('/api/groups/:code', (req, res) => {
+    const code = Number(req.params.code);
+    if (!db.prepare('SELECT 1 FROM product_groups WHERE code=?').get(code)) throw new HttpError(404, 'گروه پیدا نشد');
+    db.prepare('UPDATE product_groups SET name=? WHERE code=?').run(validateGroup(req.body || {}, false).name, code);
+    res.json(groupRows());
+  });
+  app.delete('/api/groups/:code', (req, res) => { // کالاهای این گروه «متفرقه» نمایش داده می‌شوند
+    db.prepare('DELETE FROM product_groups WHERE code=?').run(Number(req.params.code));
+    res.json(groupRows());
   });
 
   // ---------- مشتریان ----------
@@ -601,7 +639,7 @@ export function createApp(dataDir) {
     sendPdf(res, await invoicePdf(inv), pdfFileName(inv), req.query.inline === '1');
   });
 
-  // ---------- اشتراک‌گذاری (تلگرام / بله / ایتا) ----------
+  // ---------- اشتراک‌گذاری (تلگرام / بله) ----------
   const fmtMoney = (n) => new Intl.NumberFormat('fa-IR').format(n);
   async function buildShareFile(b) {
     if (b.kind === 'invoice') {
@@ -611,7 +649,7 @@ export function createApp(dataDir) {
         caption: b.caption ?? `${typ} شماره ${fmtMoney(inv.number).replace(/٬/g, '')}\n${inv.buyer_name || ''}\nمبلغ قابل پرداخت: ${fmtMoney(inv.payable)} ریال` };
     }
     if (b.kind === 'invoices-xlsx') return { buffer: await buildInvoicesXlsx(queryInvoices(b.query || {}, { all: true }).rows), filename: 'فهرست-فاکتورها.xlsx', mime: XLSX_MIME, caption: b.caption ?? 'فهرست فاکتورها' };
-    if (b.kind === 'products-xlsx') return { buffer: await buildProductsXlsx(db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all()), filename: 'کالاها.xlsx', mime: XLSX_MIME, caption: b.caption ?? 'فهرست کالاها' };
+    if (b.kind === 'products-xlsx') return { buffer: await buildProductsXlsx(db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all(), groupsMap()), filename: 'کالاها.xlsx', mime: XLSX_MIME, caption: b.caption ?? 'فهرست کالاها' };
     throw bad('نوع خروجی نامعتبر است');
   }
   app.get('/api/share/platforms', (_q, res) => {

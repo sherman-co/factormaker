@@ -1,5 +1,5 @@
 import { get, post } from './api.js';
-import { h, toast, modal } from './ui.js';
+import { h, toast, modal, download, bindDigitsText, digitsValue } from './ui.js';
 
 /** پنجره‌ی ارسال: انتخاب پلتفرم‌ها و ارسال. spec = {kind,id?,query?,title} */
 export async function openShare(spec) {
@@ -12,6 +12,19 @@ export async function openShare(spec) {
       p.ready ? null : h('small', {}, '— در تنظیمات فعال/کامل نشده'));
   });
   const out = h('div', { style: 'margin-top:10px;line-height:1.9' });
+  // واتساپ (دستی): متن آماده در wa.me باز می‌شود و فایل دانلود می‌شود؛ بدون API و بدون ریسک بن شدن حساب
+  const waPhone = bindDigitsText(h('input', { placeholder: 'شماره‌ی گیرنده (اختیاری) مثلاً 09121234567', value: spec.phone || '' }));
+  const waNumber = () => { let d = digitsValue(waPhone).replace(/\D/g, ''); if (d.startsWith('00')) d = d.slice(2); if (d.startsWith('0')) d = '98' + d.slice(1); return d; };
+  const fileUrl = spec.kind === 'invoice' ? `/api/invoices/${spec.id}/pdf` : spec.kind === 'products-xlsx' ? '/api/products/export.xlsx' : '/api/invoices/export.xlsx?' + new URLSearchParams(spec.query || {}).toString();
+  const wa = h('div', { style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--line)' },
+    h('b', {}, 'واتساپ (دستی)'),
+    h('div', { class: 'muted', style: 'font-size:12px;margin:4px 0 8px' }, 'فایل دانلود می‌شود و واتساپ با متن آماده باز می‌شود؛ فایل را داخل چت بکشید یا با گیره (📎) بفرستید.'),
+    h('div', { class: 'row' }, h('div', { class: 'field', style: 'min-width:200px' }, waPhone),
+      h('button', { class: 'btn', onclick: () => {
+        download(fileUrl);
+        const n = waNumber();
+        window.open(`https://wa.me/${n}?text=${encodeURIComponent(spec.caption || '')}`, '_blank', 'noopener');
+      } }, 'باز کردن واتساپ')));
   const send = h('button', { class: 'btn primary', onclick: async () => {
     const chosen = platforms.filter((p) => checks[p.key].checked).map((p) => p.key);
     if (!chosen.length) { toast('حداقل یک پلتفرم را انتخاب کنید', 'error'); return; }
@@ -24,7 +37,7 @@ export async function openShare(spec) {
   } }, 'ارسال');
   const m = modal(spec.title || 'ارسال', h('div', {},
     platforms.some((p) => p.ready) ? h('p', { class: 'muted', style: 'margin:0 0 6px' }, 'به کدام پیام‌رسان‌ها فرستاده شود؟') : h('p', { class: 'err' }, 'هنوز هیچ پیام‌رسانی تنظیم نشده است. از «تنظیمات ← اشتراک‌گذاری» توکن ربات و شناسه‌ی چت را وارد کنید.'),
-    ...rows, out,
+    ...rows, out, wa,
     h('div', { class: 'actions' }, send, h('button', { class: 'btn', onclick: () => m.close() }, 'بستن'))));
 }
 

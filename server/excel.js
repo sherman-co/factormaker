@@ -37,12 +37,12 @@ const PRODUCT_COLUMNS = [
 ];
 
 /** خروجی/نمونه با همان ستون‌هایی که ورود از Excel می‌خواند. */
-export async function buildProductsXlsx(products) {
+export async function buildProductsXlsx(products, groups) {
   const wb = new ExcelJS.Workbook();
   const ws = rtlSheet(wb, 'کالاها');
   ws.columns = [...PRODUCT_COLUMNS, { header: 'گروه', key: 'group', width: 18 }];
   headStyle(ws);
-  for (const p of products) ws.addRow({ code: p.code, description: p.description, unit: p.unit, price: p.price, active: p.active ? 'بله' : 'خیر', group: groupOfCode(p.code) });
+  for (const p of products) ws.addRow({ code: p.code, description: p.description, unit: p.unit, price: p.price, active: p.active ? 'بله' : 'خیر', group: groupOfCode(p.code, groups) });
   ws.getColumn('price').numFmt = '#,##0';
   ws.getColumn('code').numFmt = '@';
   return toBuffer(wb);
@@ -70,7 +70,7 @@ export async function buildProductsSample() {
   for (const t of [
     'راهنمای ورود کالا از Excel',
     'ستون‌های لازم در ردیف اول: «کد کالا»، «شرح کالا»، «واحد»، «مبلغ واحد (ریال)»؛ ستون «فعال» اختیاری است (بله/خیر).',
-    'کد باید عددی و حداقل ۳ رقم باشد؛ گروه از رقم صدگان کد تعیین می‌شود (۱۰۰ پروفیل‌ها، ۲۰۰ اتصالات، ۳۰۰ پیچ‌ها، ۴۰۰ مواد شیمیایی، ۵۰۰ توری‌ها، ۶۰۰ فوم و عایق‌ها).',
+    'کد باید عددی و حداقل ۳ رقم باشد؛ گروه از رقم صدگان کد تعیین می‌شود (دسته‌بندی‌ها را در «کالاها ← دسته‌بندی‌ها» تعریف می‌کنید؛ کدی که گروهش تعریف نشده باشد «متفرقه» نمایش داده می‌شود).',
     'ارقام فارسی و انگلیسی و جداکننده‌ی هزارگان پذیرفته می‌شود. کدهای تکراری داخل فایل خطا حساب می‌شوند.',
     'همه‌ی داده‌های این فایل ساختگی است؛ ردیف‌ها را پاک کنید و کالاهای خودتان را بنویسید.',
   ]) help.addRow([t]);

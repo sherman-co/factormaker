@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_GROUPS } from '../shared/format.js';
 
 export const DEFAULT_SETTINGS = {
   company_title: '',
@@ -22,7 +23,7 @@ export const DEFAULT_SETTINGS = {
   theme_color: '#16314f',
   tg_enabled: '0', tg_token: '', tg_chat: '', tg_base: '',
   bale_enabled: '0', bale_token: '', bale_chat: '', bale_base: '',
-  eitaa_enabled: '0', eitaa_token: '', eitaa_chat: '', eitaa_base: '',
+  proxy_url: '', tg_use_proxy: '0', bale_use_proxy: '0',
 };
 
 const SCHEMA = `
@@ -37,6 +38,7 @@ CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY, code TEXT UNIQUE NOT NULL, description TEXT NOT NULL, unit TEXT NOT NULL,
   price INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS product_groups (code INTEGER PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS customers (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, national_id TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '',
   address TEXT NOT NULL DEFAULT '', reg_no TEXT NOT NULL DEFAULT ''
@@ -79,6 +81,14 @@ export function openDb(dataDir) {
   if (!cols.includes('pay_json')) db.exec('ALTER TABLE invoices ADD COLUMN pay_json TEXT');
   const ins = db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES (?,?)');
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
+  // دسته‌بندی‌های پیش‌فرض (فقط یک بار؛ بعد از آن کاربر مدیریت می‌کند)
+  if (!db.prepare("SELECT 1 FROM settings WHERE key='groups_seeded'").get()) {
+    if (db.prepare('SELECT COUNT(*) c FROM product_groups').get().c === 0) {
+      const ins = db.prepare('INSERT INTO product_groups(code,name) VALUES (?,?)');
+      for (const [c, n] of Object.entries(DEFAULT_GROUPS)) ins.run(Number(c), n);
+    }
+    db.prepare("INSERT INTO settings(key,value) VALUES ('groups_seeded','1')").run();
+  }
   // انتقال شماره کارت/شبای قدیمی تنظیمات به فهرست حساب‌ها (فقط یک بار، اگر فهرست خالی است)
   if (db.prepare('SELECT COUNT(*) c FROM payment_accounts').get().c === 0) {
     const old = Object.fromEntries(db.prepare("SELECT key,value FROM settings WHERE key IN ('card_number','sheba','account_number','account_holder')").all().map((r) => [r.key, r.value]));

@@ -28,6 +28,8 @@ test('ارقام و اعداد', () => {
   assert.equal(formatNumber(32000000), '۳۲,۰۰۰,۰۰۰');
   assert.equal(normalizeText('پیچ m10x30'), 'پیچ M10×30');
   assert.equal(groupOfCode('۳۰۲'), '۳۰۰ - پیچ‌ها');
+  assert.equal(groupOfCode('999'), 'متفرقه');
+  assert.equal(groupOfCode('1050', { 1000: 'ویژه' }), '۱۰۰۰ - ویژه');
 });
 
 test('محاسبه‌ی جمع‌ها', () => {

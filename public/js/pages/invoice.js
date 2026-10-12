@@ -116,7 +116,7 @@ export async function invoicePage(root, idParam) {
         return hits;
       },
       label: (p) => p.description, meta: (p) => toFaDigits(p.code), sub: (p) => `${formatNumber(p.price)} / ${p.unit}`,
-      group: (p) => groupOfCode(p.code),
+      group: (p) => p.group,
       onPick: setProduct,
     });
     r.code = init.code || '';
@@ -246,7 +246,7 @@ export async function invoicePage(root, idParam) {
   const btnShare = h('button', { class: 'btn', onclick: guard(async () => {
     const r = await save(false); // ابتدا ذخیره (نهایی‌ها نهایی می‌مانند)
     if (!inv) { inv = r; history.replaceState(null, '', '#/invoice/' + r.id); } else inv = r;
-    openShare({ kind: 'invoice', id: r.id, title: `ارسال ${DOC_TYPES[docType]} ${toFaDigits(r.number)}` });
+    openShare({ kind: 'invoice', id: r.id, title: `ارسال ${DOC_TYPES[docType]} ${toFaDigits(r.number)}`, phone: digitsValue(buyer.phone), caption: `${DOC_TYPES[docType]} شماره ${toFaDigits(r.number)}\n${r.buyer_name || ''}\nمبلغ قابل پرداخت: ${formatNumber(r.payable)} ریال` });
   }) }, 'ارسال');
   const btnCopy = h('button', { class: 'btn', onclick: guard(async () => {
     if (!inv) { toast('ابتدا فاکتور را ذخیره کنید', 'error'); return; }

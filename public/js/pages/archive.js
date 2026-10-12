@@ -23,7 +23,7 @@ export async function archivePage(root) {
       h('td', { style: 'white-space:nowrap' },
         h('a', { class: 'btn small', href: '#/invoice/' + i.id }, 'ویرایش'), ' ',
         h('button', { class: 'btn small', onclick: () => download(`/api/invoices/${i.id}/pdf`) }, 'PDF'), ' ',
-        h('button', { class: 'btn small', onclick: () => openShare({ kind: 'invoice', id: i.id, title: `ارسال ${i.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور'} ${toFaDigits(i.number)}` }) }, 'ارسال'), ' ',
+        h('button', { class: 'btn small', onclick: () => openShare({ kind: 'invoice', id: i.id, title: `ارسال ${i.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور'} ${toFaDigits(i.number)}`, caption: `${i.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور'} شماره ${toFaDigits(i.number)}\n${i.buyer_name || ''}\nمبلغ قابل پرداخت: ${formatNumber(i.payable)} ریال` }) }, 'ارسال'), ' ',
         h('button', { class: 'btn small', onclick: async () => { const c = await post(`/api/invoices/${i.id}/copy`); toast('کپی ساخته شد', 'ok'); location.hash = '#/invoice/' + c.id; } },
           'کپی'), ' ',
         h('button', { class: 'btn small danger', onclick: async () => {
@@ -52,7 +52,7 @@ export async function archivePage(root) {
       h('h1', { style: 'margin:0;flex:none' }, 'بایگانی فاکتورها'), h('span', { style: 'flex:1' }), summary,
       h('a', { class: 'btn', href: '#/invoice/new' }, '+ سند جدید'),
       h('button', { class: 'btn', onclick: () => download('/api/invoices/export.xlsx?' + query({ page: 1 })) }, 'خروجی Excel'),
-      h('button', { class: 'btn', onclick: () => openShare({ kind: 'invoices-xlsx', query: { ...st, page: 1 }, title: 'ارسال فهرست فیلترشده (Excel)' }) }, 'ارسال Excel')),
+      h('button', { class: 'btn', onclick: () => openShare({ kind: 'invoices-xlsx', query: { ...st, page: 1 }, title: 'ارسال فهرست فیلترشده (Excel)', caption: 'فهرست فاکتورها' }) }, 'ارسال Excel')),
     h('div', { class: 'row', style: 'margin-bottom:12px' },
       h('div', { class: 'field', style: 'flex:2' }, h('label', {}, 'جست‌وجو'), q),
       h('div', { class: 'field' }, h('label', {}, 'از تاریخ'), from), h('div', { class: 'field' }, h('label', {}, 'تا تاریخ'), to),

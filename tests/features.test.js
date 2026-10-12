@@ -4,6 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import net from 'node:net';
 import ExcelJS from 'exceljs';
 
 // سرور ساختگی: هم API پیام‌رسان‌ها و هم GitHub (فقط برای آزمون)
@@ -93,52 +94,117 @@ test('ورود کالا از Excel: ردیف خطادار و فایل نامعت
   assert.equal((await call('GET', '/api/products/export.xlsx', null, true)).status, 200);
 });
 
-test('اشتراک‌گذاری: تلگرام، بله، ایتا با سرور ساختگی؛ توکن نشت نمی‌کند', async () => {
+test('اشتراک‌گذاری: تلگرام و بله با سرور ساختگی؛ توکن نشت نمی‌کند', async () => {
   const put = await call('PUT', '/api/settings', {
     tg_enabled: true, tg_token: SECRET, tg_chat: '111, 222', tg_base: mockBase,
     bale_enabled: true, bale_token: 'BADTOKEN', bale_chat: '333', bale_base: mockBase,
-    eitaa_enabled: true, eitaa_token: 'EITAATOK', eitaa_chat: '@chan', eitaa_base: mockBase,
     theme_color: '#112233',
   });
   assert.equal(put.tg_has_token, true);
   assert.equal(put.tg_token, undefined);
+  assert.ok(!JSON.stringify(put).includes('eitaa'));
   assert.ok(!JSON.stringify(await call('GET', '/api/settings')).includes(SECRET));
-  // خالی گذاشتن توکن آن را پاک نمی‌کند
-  await call('PUT', '/api/settings', { tg_token: '' });
+  await call('PUT', '/api/settings', { tg_token: '' }); // خالی = بدون تغییر
   assert.equal((await call('GET', '/api/settings')).tg_has_token, true);
 
   const inv = await call('POST', '/api/invoices', {
-    jdate: '1405/07/20', buyer: { name: 'خریدار' }, items: [{ code: '101', qty: 2 }], finalize: true,
-    share: { platforms: ['telegram', 'eitaa'] },
+    jdate: '1405/07/20', buyer: { name: 'خریدار' }, items: [{ code: '101', qty: 2 }], finalize: true, share: { platforms: ['telegram'] },
   });
   assert.equal(inv.http, 201);
-  assert.deepEqual(inv.share_results.map((x) => [x.platform, x.ok]), [['telegram', true], ['eitaa', true]]);
+  assert.deepEqual(inv.share_results.map((x) => [x.platform, x.ok]), [['telegram', true]]);
   const tg = received.filter((r) => r.url.startsWith(`/bot${SECRET}/sendDocument`));
-  assert.equal(tg.length, 2); // دو چت
   assert.deepEqual(tg.map((r) => r.fields.chat_id), ['111', '222']);
   assert.match(tg[0].fields.document.name, /\.pdf$/);
   assert.ok(tg[0].fields.document.size > 1000);
   assert.match(tg[0].fields.caption, /پیش‌فاکتور شماره/);
-  const ei = received.find((r) => r.url.startsWith('/EITAATOK/sendFile'));
-  assert.equal(ei.fields.chat_id, '@chan');
-  assert.ok(ei.fields.file.size > 1000);
 
-  // بله با توکن نادرست: خطا، بدون نشت توکن
   const r = await call('POST', '/api/share', { kind: 'products-xlsx', platforms: ['bale', 'telegram'] });
-  const bale = r.results.find((x) => x.platform === 'bale');
-  assert.equal(bale.ok, false);
+  assert.equal(r.results.find((x) => x.platform === 'bale').ok, false);
   assert.ok(!JSON.stringify(r).includes('BADTOKEN'));
   assert.equal(r.results.find((x) => x.platform === 'telegram').ok, true);
   assert.equal((await call('POST', '/api/share', { kind: 'invoices-xlsx', platforms: ['telegram'], query: {} })).results[0].ok, true);
-
-  // ارسال آزمایشی (متن)
-  const t = await call('POST', '/api/share/test', { platform: 'telegram' });
-  assert.equal(t.results[0].ok, true);
+  assert.equal((await call('POST', '/api/share/test', { platform: 'telegram' })).results[0].ok, true);
   assert.ok(received.some((x) => x.url.startsWith(`/bot${SECRET}/sendMessage`)));
-  // غیرفعال/بدون پیکربندی
-  await call('PUT', '/api/settings', { eitaa_enabled: false });
-  assert.equal((await call('POST', '/api/share', { kind: 'products-xlsx', platforms: ['eitaa'] })).results[0].ok, false);
+  assert.equal((await call('POST', '/api/share', { kind: 'products-xlsx', platforms: ['eitaa'] })).results[0].ok, false); // دیگر پشتیبانی نمی‌شود
+  await call('PUT', '/api/settings', { tg_enabled: false });
+  assert.equal((await call('POST', '/api/share', { kind: 'products-xlsx', platforms: ['telegram'] })).results[0].ok, false);
+  await call('PUT', '/api/settings', { tg_enabled: true });
   assert.equal((await call('POST', '/api/share', { kind: 'products-xlsx', platforms: [] })).http, 400);
+});
+
+test('پروکسی: HTTP (CONNECT) و SOCKS5؛ آدرس نامعتبر؛ فقط پلتفرم تیک‌خورده', async () => {
+  const hits = { http: 0, socks: 0 };
+  // پروکسی HTTP ساده با CONNECT
+  const httpProxy = http.createServer((_q, r) => { r.statusCode = 405; r.end(); });
+  httpProxy.on('connect', (req, clientSocket, head) => {
+    hits.http++;
+    const [host, port] = req.url.split(':');
+    const up = net.connect(Number(port), host, () => { clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n'); up.write(head); up.pipe(clientSocket); clientSocket.pipe(up); });
+    up.on('error', () => clientSocket.destroy()); clientSocket.on('error', () => up.destroy());
+  });
+  await new Promise((r) => httpProxy.listen(0, '127.0.0.1', r));
+  // پروکسی SOCKS5 بدون احراز هویت
+  const socks = net.createServer((c) => {
+    c.once('data', () => {
+      c.write(Buffer.from([5, 0]));
+      c.once('data', (req) => {
+        hits.socks++;
+        let host; let off;
+        if (req[3] === 1) { host = [...req.subarray(4, 8)].join('.'); off = 8; } else { const n = req[4]; host = req.subarray(5, 5 + n).toString(); off = 5 + n; }
+        const port = req.readUInt16BE(off);
+        const up = net.connect(port, host, () => { c.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 0])); up.pipe(c); c.pipe(up); });
+        up.on('error', () => c.destroy()); c.on('error', () => up.destroy());
+      });
+    });
+    c.on('error', () => {});
+  });
+  await new Promise((r) => socks.listen(0, '127.0.0.1', r));
+  try {
+    assert.equal((await call('PUT', '/api/settings', { proxy_url: 'not a url' })).http, 400);
+    assert.equal((await call('PUT', '/api/settings', { proxy_url: 'ftp://x:1' })).http, 400);
+    const send = async () => { const r = (await call('POST', '/api/share', { kind: 'products-xlsx', platforms: ['telegram'] })).results[0]; if (!r.ok) console.error('SEND RESULT', JSON.stringify(r)); return r; };
+
+    // بدون تیک «استفاده از پروکسی»، پروکسی استفاده نمی‌شود
+    await call('PUT', '/api/settings', { proxy_url: `http://127.0.0.1:${httpProxy.address().port}`, tg_use_proxy: false });
+    assert.equal((await send()).ok, true); assert.equal(hits.http, 0);
+
+    await call('PUT', '/api/settings', { tg_use_proxy: true });
+    assert.equal((await send()).ok, true); assert.ok(hits.http >= 1, 'HTTP proxy used');
+
+    await call('PUT', '/api/settings', { proxy_url: `socks5://127.0.0.1:${socks.address().port}` });
+    assert.equal((await send()).ok, true); assert.ok(hits.socks >= 1, 'SOCKS5 proxy used');
+
+    // پروکسی خراب: خطای فارسی و بدون نشت
+    await call('PUT', '/api/settings', { proxy_url: 'http://127.0.0.1:1' });
+    const bad = await send();
+    assert.equal(bad.ok, false);
+    assert.match(bad.error, /پروکسی/);
+  } finally {
+    await call('PUT', '/api/settings', { proxy_url: '', tg_use_proxy: false });
+    httpProxy.close(); socks.close();
+  }
+});
+
+test('دسته‌بندی‌ها و کد گروه', async () => {
+  const groups = await (await call('GET', '/api/groups', null, true)).json();
+  assert.deepEqual(groups.slice(0, 2).map((g) => g.code), [100, 200]);
+  assert.equal(groups.find((g) => g.code === 300).count, 2); // پیچ‌های نمونه
+  assert.equal((await call('POST', '/api/groups', { code: 150, name: 'x' })).http, 400);   // مضرب ۱۰۰ نیست
+  assert.equal((await call('POST', '/api/groups', { code: 300, name: 'تکراری' })).http, 400);
+  assert.equal((await call('POST', '/api/groups', { code: 700, name: '' })).http, 400);
+  assert.equal((await call('POST', '/api/groups', { code: '۷۰۰', name: 'یراق‌آلات' })).http, 201);
+  // کالا با گروه تازه‌تعریف‌شده و کالا با گروه تعریف‌نشده
+  await call('POST', '/api/products', { code: '701', description: 'کالای گروه تازه', unit: 'عدد', price: 1 });
+  await call('POST', '/api/products', { code: '801', description: 'کالای بدون گروه', unit: 'عدد', price: 1 });
+  const list = await (await call('GET', '/api/products', null, true)).json();
+  assert.equal(list.find((p) => p.code === '701').group, '۷۰۰ - یراق‌آلات');
+  assert.equal(list.find((p) => p.code === '801').group, 'متفرقه');
+  assert.equal(list.find((p) => p.code === '801').group_code, 800);
+  // ویرایش نام و حذف: کالاها «متفرقه» می‌شوند
+  assert.ok((await (await call('PUT', '/api/groups/700', { name: 'یراق' }, true)).json()).some((g) => g.name === 'یراق'));
+  await call('DELETE', '/api/groups/700');
+  assert.equal((await (await call('GET', '/api/products', null, true)).json()).find((p) => p.code === '701').group, 'متفرقه');
+  assert.equal((await call('PUT', '/api/groups/999', { name: 'x' })).http, 404);
 });
 
 test('لوگو، حالت سربرگ و رنگ پوسته', async () => {

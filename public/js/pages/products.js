@@ -8,6 +8,9 @@ export async function productsPage(root) {
   let rows = [];
   let q = '';
   let onlyActive = false;
+  let groups = await get('/api/groups');
+  const gmap = () => Object.fromEntries(groups.map((g) => [g.code, g.name]));
+  let groupFilter = '';
   const selected = new Set(); // کدهای تیک‌خورده (ماندگار بین جست‌وجوها)
   const tbody = h('tbody');
   const count = h('span', { class: 'muted' });
@@ -30,6 +33,8 @@ export async function productsPage(root) {
 
   async function load() {
     rows = await get('/api/products?q=' + encodeURIComponent(q) + (onlyActive ? '&active=1' : ''));
+    if (groupFilter === 'misc') rows = rows.filter((p) => !gmap()[p.group_code]);
+    else if (groupFilter) rows = rows.filter((p) => String(p.group_code) === groupFilter);
     tbody.replaceChildren(...rows.map((p) => h('tr', {},
       h('td', { style: 'width:34px;text-align:center' }, h('input', { type: 'checkbox', disabled: !p.active, title: p.active ? '' : 'کالای غیرفعال', checked: selected.has(p.code), onchange: (e) => { e.target.checked ? selected.add(p.code) : selected.delete(p.code); paintBar(); } })),
       h('td', { class: 'num' }, toFaDigits(p.code)),
@@ -66,7 +71,7 @@ export async function productsPage(root) {
     const err = h('div', { class: 'err' });
     const m = modal(p ? 'ویرایش کالا' : 'کالای جدید', h('div', {},
       h('div', { class: 'row' }, h('div', { class: 'field' }, h('label', {}, 'کد کالا (مثلاً ۱۰۱)'), code),
-        h('div', { class: 'field', style: 'flex:2' }, h('label', {}, 'گروه'), h('input', { disabled: true, id: 'grp', value: p ? p.group : '' }))),
+        h('div', { class: 'field', style: 'flex:2' }, h('label', {}, 'گروه'), h('input', { disabled: true, id: 'grp', value: p ? groupOfCode(p.code, gmap()) : '' }))),
       h('div', { class: 'field', style: 'margin-top:10px' }, h('label', {}, 'شرح کالا'), desc),
       h('div', { class: 'row', style: 'margin-top:10px' },
         h('div', { class: 'field' }, h('label', {}, 'واحد'), unit),
@@ -82,8 +87,45 @@ export async function productsPage(root) {
           } catch (e) { err.textContent = e.message; }
         } }, 'ذخیره'),
         h('button', { class: 'btn', onclick: () => m.close() }, 'انصراف'))));
-    code.addEventListener('input', () => { m.box.querySelector('#grp').value = digitsValue(code) ? groupOfCode(digitsValue(code)) : ''; });
+    code.addEventListener('input', () => { m.box.querySelector('#grp').value = digitsValue(code) ? groupOfCode(digitsValue(code), gmap()) : ''; });
     code.focus();
+  }
+
+  const groupSel = h('select', { style: 'width:auto;min-width:150px', onchange: (e) => { groupFilter = e.target.value; load(); } });
+  function paintGroupSel() {
+    groupSel.replaceChildren(h('option', { value: '' }, 'همه‌ی دسته‌ها'),
+      ...groups.map((g) => h('option', { value: String(g.code), selected: groupFilter === String(g.code) }, `${toFaDigits(g.code)} - ${g.name}`)),
+      h('option', { value: 'misc', selected: groupFilter === 'misc' }, 'متفرقه'));
+  }
+  paintGroupSel();
+
+  function manageGroups() {
+    const body = h('tbody');
+    const code = bindDigitsText(h('input', { placeholder: 'کد گروه: ۷۰۰', style: 'max-width:130px' }));
+    const name = h('input', { placeholder: 'نام دسته‌بندی' });
+    const err = h('div', { class: 'err' });
+    const paint = () => {
+      body.replaceChildren(...groups.map((g) => h('tr', {},
+        h('td', { class: 'num' }, toFaDigits(g.code)), h('td', {}, g.name), h('td', { class: 'num' }, toFaDigits(g.count)),
+        h('td', { style: 'white-space:nowrap' },
+          h('button', { class: 'btn small', onclick: async () => {
+            const n = prompt('نام جدید دسته‌بندی', g.name);
+            if (n && n.trim()) { try { groups = await put('/api/groups/' + g.code, { name: n }); paint(); paintGroupSel(); load(); } catch (e) { err.textContent = e.message; } }
+          } }, 'ویرایش نام'), ' ',
+          h('button', { class: 'btn small danger', onclick: async () => {
+            if (await confirmBox(`دسته‌بندی «${g.name}» حذف شود؟ ${g.count ? `${toFaDigits(g.count)} کالا با این کد گروه «متفرقه» نمایش داده می‌شوند (خود کالاها حذف نمی‌شوند).` : ''}`, 'حذف')) { groups = await del('/api/groups/' + g.code); paint(); paintGroupSel(); load(); }
+          } }, 'حذف')))));
+      if (!groups.length) body.append(h('tr', {}, h('td', { colspan: 4, class: 'muted' }, 'دسته‌بندی‌ای تعریف نشده؛ همه‌ی کالاها «متفرقه» هستند.')));
+    };
+    paint();
+    const m = modal('دسته‌بندی‌ها و کد گروه', h('div', {},
+      h('p', { class: 'muted', style: 'margin-top:0' }, 'کد گروه همان «رقم صدگان» کد کالاست: کالای ۳۰۲ در گروه ۳۰۰ قرار می‌گیرد. کالایی که گروهش تعریف نشده باشد «متفرقه» نمایش داده می‌شود.'),
+      h('div', { class: 'tablewrap' }, h('table', { class: 'grid' }, h('thead', {}, h('tr', {}, ['کد گروه', 'نام', 'تعداد کالا', ''].map((t) => h('th', {}, t)))), body)),
+      h('div', { class: 'row', style: 'margin-top:12px;align-items:center' }, code, h('div', { style: 'flex:1;min-width:160px' }, name),
+        h('button', { class: 'btn primary', onclick: async () => {
+          try { groups = await post('/api/groups', { code: digitsValue(code), name: name.value }); code.value = name.value = ''; err.textContent = ''; paint(); paintGroupSel(); load(); } catch (e) { err.textContent = e.message; }
+        } }, '+ افزودن')),
+      err, h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => m.close() }, 'بستن'))));
   }
 
   function importExcel() {
@@ -132,6 +174,8 @@ export async function productsPage(root) {
       h('div', { style: 'flex:1;min-width:220px' }, search),
       h('label', {}, h('input', { type: 'checkbox', onchange: (e) => { onlyActive = e.target.checked; load(); } }), ' فقط فعال‌ها'),
       count,
+      groupSel,
+      h('button', { class: 'btn', onclick: manageGroups }, 'دسته‌بندی‌ها'),
       h('button', { class: 'btn', onclick: importExcel }, 'ورود از Excel'),
       h('button', { class: 'btn', onclick: () => download('/api/products/export.xlsx') }, 'خروجی Excel'),
       h('button', { class: 'btn', onclick: () => openShare({ kind: 'products-xlsx', title: 'ارسال فهرست کالاها' }) }, 'ارسال'),
