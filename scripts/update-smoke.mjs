@@ -33,7 +33,8 @@ const mock = http.createServer((req, res) => {
 
 const base = `http://127.0.0.1:${appPort}`;
 const env = { ...process.env, PORT: String(appPort), ADMIN_PASSWORD: 'upd-pass-1', OPEN_BROWSER: '0', UPDATE_API: `http://127.0.0.1:${mockPort}`, UPDATE_ASSET_PATTERN: 'new\\.zip$' };
-const child = spawn(path.join(app, exeName), [], { cwd: app, env, stdio: 'ignore', detached: false });
+const outFd = fs.openSync(path.join(work, 'exe.log'), 'a');
+const child = spawn(path.join(app, exeName), [], { cwd: app, env, stdio: ['ignore', outFd, outFd], detached: false });
 const version = async () => { try { return (await (await fetch(base + '/api/version', { signal: AbortSignal.timeout(1500) })).json()).version; } catch { return null; } };
 const wait = async (pred, sec) => { for (let i = 0; i < sec; i++) { const v = await version(); if (pred(v)) return v; await new Promise((r) => setTimeout(r, 1000)); } return await version(); };
 let code = 0;
@@ -48,14 +49,20 @@ try {
   must(chk.newer && chk.canAutoUpdate, 'update available + auto-update allowed');
   const inst = await fetch(base + '/api/update/install', { method: 'POST', headers: H, body: JSON.stringify({ confirm: true }) });
   must(inst.ok, 'install accepted');
-  const v1 = await wait((v) => v === '9.9.9', 60);
+  const v1 = await wait((v) => v === '9.9.9', 40);
   must(v1 === '9.9.9', 'new version running: ' + v1);
   const l2 = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'upd-pass-1' }) });
   const list = await (await fetch(base + '/api/products', { headers: { cookie: l2.headers.get('set-cookie').split(';')[0] } })).json();
   must(list.length === 1 && list[0].code === '101', 'data preserved');
   must(fs.readdirSync(path.join(app, 'data', 'backups')).some((f) => f.startsWith('pre-update')), 'pre-update backup created');
   console.log('UPDATE SMOKE OK');
-} catch (e) { console.error(e); code = 1; }
+} catch (e) {
+  console.error(e); code = 1;
+  for (const f of [path.join(work, 'exe.log'), path.join(app, 'data', 'update.log')]) {
+    console.error(`----- ${path.basename(f)} -----`); try { console.error(fs.readFileSync(f, 'utf8')); } catch { console.error('(no file)'); }
+  }
+  try { console.error('----- files in app dir -----', fs.readdirSync(app).join(', '), '| stage:', fs.existsSync(path.join(app, 'update-tmp')) ? fs.readdirSync(path.join(app, 'update-tmp')).join(', ') : '(gone)'); } catch { /* ignore */ }
+}
 finally {
   mock.close();
   // پروسه‌ی نسخه‌ی جدید فرزند ما نیست؛ با پورت پیدا و بسته می‌شود

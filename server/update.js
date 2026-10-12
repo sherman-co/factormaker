@@ -86,15 +86,23 @@ export async function installUpdate({ backup }) {
   const log = path.join(ROOT, 'data', 'update.log');
   if (process.platform === 'win32') {
     const script = path.join(stage, 'apply.cmd');
+    // نکته‌ها: «timeout» بدون کنسول کار نمی‌کند (ping استفاده شد)؛ پاک کردن پوشه‌ی موقت (که خود اسکریپت داخل آن است) باید آخرین خط باشد،
+    // وگرنه cmd خطوط بعدی را پیدا نمی‌کند و برنامه‌ی جدید اجرا نمی‌شود.
     fs.writeFileSync(script, [
       '@echo off',
       `set PID=${process.pid}`,
+      `echo [%date% %time%] waiting for old process %PID% >> "${log}"`,
       ':wait',
-      'tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul && (timeout /t 1 /nobreak >nul & goto wait)',
-      `robocopy "${newDir}" "${ROOT}" /E /R:30 /W:1 /NFL /NDL /NJH /NJS /NP > "${log}" 2>&1`,
-      `if %ERRORLEVEL% GEQ 8 (echo UPDATE FAILED >> "${log}" & exit /b 1)`,
-      `rmdir /s /q "${stage}"`,
+      'tasklist /FI "PID eq %PID%" /NH 2>nul | find "%PID%" >nul',
+      'if not errorlevel 1 (ping -n 2 127.0.0.1 >nul & goto wait)',
+      `echo [%date% %time%] old process gone, copying files >> "${log}"`,
+      `robocopy "${newDir}" "${ROOT}" /E /R:15 /W:1 /NFL /NDL /NJH /NJS /NP >> "${log}" 2>&1`,
+      'set RC=%ERRORLEVEL%',
+      `echo [%date% %time%] robocopy exit code %RC% >> "${log}"`,
+      `if %RC% GEQ 8 (echo UPDATE FAILED >> "${log}" & exit /b 1)`,
       `start "" "${path.join(ROOT, EXE_NAME)}"`,
+      `echo [%date% %time%] new version started >> "${log}"`,
+      `rmdir /s /q "${stage}"`,
       '',
     ].join('\r\n'));
     spawn('cmd.exe', ['/c', script], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
