@@ -6,10 +6,6 @@ let browserPromise = null;
 function findChrome() {
   const env = process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROME_PATH;
   if (env && fs.existsSync(env)) return env;
-  try {
-    const p = puppeteer.executablePath();
-    if (p && fs.existsSync(p)) return p;
-  } catch { /* ignore */ }
   // مرورگرهای نصب‌شده روی سیستم
   const cands = [
     '/opt/pw-browsers/chromium/chrome-linux/chrome',
