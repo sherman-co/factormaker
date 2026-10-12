@@ -101,6 +101,37 @@ export async function settingsPage(root) {
     h('div', { class: 'tablewrap' }, h('table', { class: 'grid' }, h('thead', {}, h('tr', {}, ['عنوان', 'صاحب حساب', 'شماره کارت', 'شماره شبا', 'شماره حساب', ''].map((t) => h('th', {}, t)))), accBody)));
   loadAccounts();
 
+  // ---------- داده‌ها و بکاپ ----------
+  const info = await get('/api/data-info');
+  const restoreInput = h('input', { type: 'file', accept: '.zip,.db', style: 'max-width:100%' });
+  const restoreMsg = h('div', { style: 'margin-top:8px' });
+  const dataCard = h('div', { class: 'card' }, h('h2', {}, 'داده‌ها و بکاپ'),
+    h('div', { style: 'background:#f7f9fb;border:1px solid var(--line);border-radius:8px;padding:10px 12px;line-height:1.9' },
+      h('div', {}, h('b', {}, 'پوشه‌ی داده‌ی این برنامه: '), h('span', { style: 'direction:ltr;display:inline-block;word-break:break-all' }, info.dataDir)),
+      h('div', {}, `در حال حاضر: ${toFaDigits(info.invoices)} فاکتور، ${toFaDigits(info.products)} کالا، ${toFaDigits(info.customers)} مشتری، ${toFaDigits(info.pdfs)} فایل PDF — حجم دیتابیس ${toFaDigits((info.dbSize / 1048576).toFixed(1))} مگابایت`),
+      h('div', { class: 'muted', style: 'font-size:12px' }, 'اگر بعد از جابه‌جایی برنامه اطلاعات قبلی را نمی‌بینید، این مسیر را بررسی کنید: برنامه فقط همین پوشه را می‌خواند.')),
+    h('h3', { style: 'margin:14px 0 6px;font-size:15px' }, 'بکاپ گرفتن'),
+    h('div', { class: 'btnbar', style: 'margin-top:0' },
+      h('button', { class: 'btn primary', onclick: () => download('/api/backup/full') }, 'دانلود بکاپ کامل (zip: همه‌چیز + PDFها + مهر + لوگو)'),
+      h('button', { class: 'btn', onclick: () => download('/api/backup') }, 'فقط دیتابیس (.db)')),
+    h('h3', { style: 'margin:16px 0 6px;font-size:15px' }, 'بازیابی (برگرداندن بکاپ)'),
+    h('p', { class: 'muted', style: 'margin:0 0 8px' }, 'فایل zip بکاپ کامل یا فایل .db را انتخاب کنید. تمام اطلاعات فعلی (فاکتورها، کالاها، مشتریان، تنظیمات، رمز عبور) با محتوای بکاپ جایگزین می‌شود؛ قبلش خودکار از وضعیت فعلی در data/backups بکاپ گرفته می‌شود. بکاپ نسخه‌های قدیمی‌تر برنامه هم پذیرفته می‌شود.'),
+    h('div', { class: 'row', style: 'align-items:center' }, restoreInput,
+      h('button', { class: 'btn danger', onclick: async (e) => {
+        const f = restoreInput.files[0];
+        if (!f) { toast('ابتدا فایل بکاپ را انتخاب کنید', 'error'); return; }
+        if (!(await confirmBox(`اطلاعات فعلی با «${f.name}» جایگزین شود؟ (از وضعیت فعلی خودکار بکاپ گرفته می‌شود. بعد از بازیابی باید با رمز عبورِ موجود در بکاپ دوباره وارد شوید.)`, 'بله، بازیابی کن'))) return;
+        e.target.disabled = true; restoreMsg.replaceChildren(h('span', { class: 'muted' }, 'در حال بازیابی...'));
+        try {
+          const res = await fetch('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+          const d = await res.json();
+          if (!res.ok) throw new Error(d.error || 'بازیابی ناموفق بود');
+          restoreMsg.replaceChildren(h('div', { style: 'color:var(--ok)' }, `✔ بازیابی شد: ${toFaDigits(d.invoices)} فاکتور، ${toFaDigits(d.products)} کالا، ${toFaDigits(d.customers)} مشتری${d.defaultAdmin ? ` — در بکاپ کاربری نبود؛ ورود: admin / ${d.defaultAdmin.password}` : ''}. چند ثانیه دیگر صفحه‌ی ورود باز می‌شود...`));
+          setTimeout(() => { location.hash = '#/'; location.reload(); }, d.defaultAdmin ? 8000 : 2500);
+        } catch (er) { restoreMsg.replaceChildren(h('div', { class: 'err' }, er.message)); e.target.disabled = false; }
+      } }, 'بازیابی')),
+    restoreMsg);
+
   // تغییر رمز
   const op = h('input', { type: 'password' }); const np = h('input', { type: 'password' });
   root.append(h('div', { class: 'wrap' },
@@ -122,9 +153,7 @@ export async function settingsPage(root) {
       h('p', { class: 'muted' }, 'فایل PNG با پس‌زمینه شفاف بارگذاری کنید.'), stampBox,
       h('div', { style: 'margin-top:10px' }, h('label', {}, f.stamp_in_pdf, ' درج مهر در PDF (پیش‌فرض برای فاکتورهای جدید)')),
       h('div', { class: 'btnbar' }, h('button', { class: 'btn primary', onclick: save }, 'ذخیره'))),
-    h('div', { class: 'card' }, h('h2', {}, 'بکاپ'),
-      h('p', { class: 'muted' }, 'فایل دیتابیس را دانلود کنید. برای بکاپ کامل (شامل PDFها) کل پوشه data را کپی کنید.'),
-      h('button', { class: 'btn', onclick: () => download('/api/backup') }, 'دانلود بکاپ دیتابیس')),
+    dataCard,
     h('div', { class: 'card' }, h('h2', {}, 'تغییر رمز عبور'),
       h('div', { class: 'row' }, fld('رمز فعلی', op), fld('رمز جدید (حداقل ۶ نویسه)', np),
         h('button', { class: 'btn', onclick: async () => {

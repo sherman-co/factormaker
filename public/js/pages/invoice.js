@@ -19,7 +19,7 @@ export async function invoicePage(root, idParam) {
   const savedPayRaw = inv?.pay_json ? JSON.parse(inv.pay_json) : null;
   const savedPay = savedPayRaw && (Array.isArray(savedPayRaw) ? { account_id: null, lines: savedPayRaw } : savedPayRaw);
   const byCode = new Map(products.map((p) => [p.code, p]));
-  const storedByCode = new Map((inv?.status === 'final' ? inv.items : []).map((i) => [i.product_code, { description: i.description, unit: i.unit, list_price: i.list_price, price: i.price, active: true }]));
+  const storedByCode = new Map((inv ? inv.items : []).map((i) => [i.product_code, { description: i.description, unit: i.unit, list_price: i.list_price, price: i.price, active: true }]));
   const activeProducts = products.filter((p) => p.active);
 
   // ---------- فیلدهای سربرگ ----------

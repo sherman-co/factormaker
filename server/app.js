@@ -5,6 +5,7 @@ import { ROOT, firstExisting } from './paths.js';
 import { buildInvoicesXlsx, buildProductsXlsx, buildProductsSample, parseProductsXlsx, XLSX_MIME } from './excel.js';
 import { shareTo, platformConfig, PLATFORMS, parseProxy } from './share.js';
 import { checkUpdate, installUpdate } from './update.js';
+import { buildFullBackup, restoreBackup, dataInfo } from './backup.js';
 import { shareOptions, buildFileName, buildCaption, FILE_SEPARATORS, SHARE_MODES } from '../shared/share-format.js';
 import { openDb, tx, getSettings, DEFAULT_SETTINGS } from './db.js';
 import { ensureAdmin, login, logout, userFromToken, parseCookies, setPassword, hashPw } from './auth.js';
@@ -392,14 +393,15 @@ export function createApp(dataDir) {
       const row = items.length + 1;
       const p = code && db.prepare('SELECT * FROM products WHERE code=?').get(code);
       if (!p) { errors.push(`ردیف ${i + 1}: کد نامعتبر`); return; }
-      const oldRow = existing?.status === 'final' && existing.items.find((x) => x.product_code === code);
+      const oldRow = existing?.items.find((x) => x.product_code === code); // ردیف قبلاً ذخیره‌شده‌ی همین فاکتور
       if (!p.active && !oldRow) { errors.push(`ردیف ${i + 1}: کالای ${code} غیرفعال است`); return; }
       const qty = parseNumber(r.qty);
       if (qty === null || qty <= 0 || qty > 1e9) { errors.push(`ردیف ${i + 1}: مقدار نامعتبر`); return; }
       const price = r.unit_price === '' || r.unit_price == null ? p.price : parseNumber(r.unit_price);
       if (price === null || price < 0 || price > 1e13) { errors.push(`ردیف ${i + 1}: مبلغ واحد نامعتبر`); return; }
-      // در ویرایش فاکتور نهایی، ردیف‌های قبلی شرح/واحد/قیمت لیستِ لحظه‌ی ثبت را نگه می‌دارند
-      const old = existing?.status === 'final' && existing.items.find((x) => x.product_code === code);
+      // ردیف‌هایی که قبلاً در همین فاکتور (نهایی یا پیش‌نویس) ذخیره شده‌اند، شرح/واحد/قیمت لیستِ لحظه‌ی ثبت را نگه می‌دارند؛
+      // تغییر کالاها فقط روی ردیف‌های تازه و فاکتورهای جدید اثر می‌گذارد.
+      const old = oldRow;
       items.push({
         position: row, code, description: old ? old.description : p.description, unit: old ? old.unit : p.unit, qty, unit_price: Math.round(price), list_price: old ? old.list_price : p.price,
         line_total: lineTotal(qty, Math.round(price)), remark: clean(r.remark),
@@ -707,6 +709,22 @@ export function createApp(dataDir) {
   app.get('/api/backup', (_req, res) => {
     const file = backupDb();
     res.download(file, path.basename(file));
+  });
+  app.get('/api/data-info', (_q, res) => res.json(dataInfo(db, dataDir)));
+  app.get('/api/backup/full', (_req, res) => {
+    const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="backup.zip"; filename*=UTF-8''${encodeURIComponent(`factormaker-backup-${stamp}.zip`)}`);
+    res.send(buildFullBackup(db, dataDir));
+  });
+  // بازیابی: بدنه همان فایل zip/db است (نه JSON)
+  app.post('/api/restore', express.raw({ type: () => true, limit: '1gb' }), (req, res) => {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw bad('فایلی ارسال نشد');
+    let summary;
+    try { summary = restoreBackup(db, dataDir, req.body, { beforeReplace: () => backupDb('before-restore') }); } catch (e) { throw bad(e.message); }
+    const admin = ensureAdmin(db); // اگر بکاپ کاربری نداشت، مدیر پیش‌فرض ساخته می‌شود
+    res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+    res.json({ ok: true, ...summary, defaultAdmin: admin || undefined });
   });
 
   // ---------- خطاها ----------

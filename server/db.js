@@ -72,11 +72,8 @@ CREATE INDEX IF NOT EXISTS idx_items_invoice ON invoice_items(invoice_id, positi
 CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(jdate);
 `;
 
-export function openDb(dataDir) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  for (const d of ['pdfs', 'stamps', 'logos', 'backups']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
-  const db = new DatabaseSync(path.join(dataDir, 'factormaker.db'));
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+/** ساخت/به‌روزرسانی ساختار و مقادیر پیش‌فرض؛ روی دیتابیس قدیمی و بعد از بازیابی بکاپ هم امن اجرا می‌شود. */
+export function migrate(db) {
   db.exec(SCHEMA);
   const cols = db.prepare('PRAGMA table_info(invoices)').all().map((c) => c.name);
   if (!cols.includes('doc_type')) db.exec("ALTER TABLE invoices ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'proforma'");
@@ -99,6 +96,15 @@ export function openDb(dataDir) {
         .run('حساب اصلی', old.account_holder || '', old.card_number || '', old.sheba || '', old.account_number || '');
     }
   }
+}
+
+export function openDb(dataDir) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  for (const d of ['pdfs', 'stamps', 'logos', 'backups']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
+  const db = new DatabaseSync(path.join(dataDir, 'factormaker.db'));
+  // حالت ساده (نه WAL): همیشه تمام داده داخل خود factormaker.db است؛ پس کپی کردن فقط همین فایل هم کامل است.
+  db.exec('PRAGMA journal_mode = DELETE; PRAGMA foreign_keys = ON;');
+  migrate(db);
   return db;
 }
 
