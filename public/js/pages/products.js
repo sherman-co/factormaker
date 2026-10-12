@@ -1,5 +1,6 @@
 import { get, post, put, del } from '../api.js';
-import { h, toast, modal, bindNumber, numValue, setNum, bindDigitsText, digitsValue, confirmBox } from '../ui.js';
+import { h, toast, modal, bindNumber, numValue, setNum, bindDigitsText, digitsValue, confirmBox, download, readFileAsDataURL } from '../ui.js';
+import { openShare } from '../share.js';
 import { formatNumber, toFaDigits, toEnDigits, groupOfCode } from '/shared/format.js';
 
 export async function productsPage(root) {
@@ -64,6 +65,45 @@ export async function productsPage(root) {
     code.focus();
   }
 
+  function importExcel() {
+    const file = h('input', { type: 'file', accept: '.xlsx' });
+    const mode = h('select', {}, h('option', { value: 'skip' }, 'کدهای موجود را نادیده بگیر (فقط کالاهای تازه اضافه شوند)'), h('option', { value: 'update' }, 'کدهای موجود را به‌روز کن (شرح، واحد، قیمت، وضعیت)'));
+    const ignore = h('input', { type: 'checkbox' });
+    const out = h('div', { style: 'margin-top:10px' });
+    const go = h('button', { class: 'btn primary', disabled: true }, 'ورود کالاها');
+    let data = null;
+    const body = () => ({ data, mode: mode.value, ignoreErrors: ignore.checked });
+    const STATUS = { new: ['تازه', 'final'], update: ['به‌روزرسانی', 'pro'], same: ['بدون تغییر', ''], skip: ['نادیده', ''], error: ['خطا', 'off'] };
+    async function preview() {
+      if (!data) return;
+      try {
+        const r = await post('/api/products/import', { ...body(), dryRun: true });
+        const sm = r.summary;
+        out.replaceChildren(
+          h('div', {}, `تازه: ${toFaDigits(sm.new)} — به‌روزرسانی: ${toFaDigits(sm.update)} — بدون تغییر: ${toFaDigits(sm.same)} — نادیده: ${toFaDigits(sm.skip)} — خطا: ${toFaDigits(sm.error)}`),
+          h('div', { class: 'tablewrap', style: 'max-height:260px;overflow:auto;margin-top:8px' }, h('table', { class: 'grid' },
+            h('tbody', {}, r.rows.map((x) => h('tr', {}, h('td', { class: 'num' }, toFaDigits(x.row)), h('td', { class: 'num' }, toFaDigits(x.code)), h('td', {}, x.description),
+              h('td', {}, h('span', { class: 'tag ' + STATUS[x.status][1] }, STATUS[x.status][0]), x.message ? ' ' + x.message : '')))))),
+          r.truncated ? h('div', { class: 'muted' }, 'فقط ۵۰۰ ردیف اول نمایش داده شد.') : null);
+        go.disabled = sm.new + sm.update === 0 || (sm.error > 0 && !ignore.checked);
+      } catch (e) { out.replaceChildren(h('div', { class: 'err' }, e.message)); go.disabled = true; }
+    }
+    file.addEventListener('change', async () => { data = file.files[0] ? await readFileAsDataURL(file.files[0]) : null; preview(); });
+    mode.addEventListener('change', preview); ignore.addEventListener('change', preview);
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      try { const r = await post('/api/products/import', body()); toast(`ورود انجام شد: ${toFaDigits(r.summary.new)} تازه، ${toFaDigits(r.summary.update)} به‌روزرسانی`, 'ok'); m.close(); load(); }
+      catch (e) { out.replaceChildren(h('div', { class: 'err' }, e.message)); go.disabled = false; }
+    });
+    const m = modal('ورود کالاها از Excel', h('div', {},
+      h('p', { class: 'muted', style: 'margin-top:0' }, 'ستون‌ها: کد کالا، شرح کالا، واحد، مبلغ واحد (ریال) و اختیاری «فعال». ',
+        h('a', { href: '/api/products/template.xlsx' }, 'دانلود فایل نمونه')),
+      h('div', { class: 'field' }, h('label', {}, 'فایل Excel (.xlsx)'), file),
+      h('div', { class: 'field', style: 'margin-top:8px' }, h('label', {}, 'اگر کد از قبل وجود داشت'), mode),
+      h('label', { style: 'display:block;margin-top:8px' }, ignore, ' ردیف‌های خطادار نادیده گرفته شوند'),
+      out, h('div', { class: 'actions' }, go, h('button', { class: 'btn', onclick: () => m.close() }, 'بستن'))), { wide: true });
+  }
+
   const search = h('input', { placeholder: 'جست‌وجو با کد، شرح یا گروه...', oninput: (e) => { q = e.target.value; clearTimeout(search._t); search._t = setTimeout(load, 200); } });
   root.append(h('div', { class: 'wrap' }, h('div', { class: 'card' },
     h('div', { class: 'row', style: 'margin-bottom:12px;align-items:center' },
@@ -71,6 +111,9 @@ export async function productsPage(root) {
       h('div', { style: 'flex:1;min-width:220px' }, search),
       h('label', {}, h('input', { type: 'checkbox', onchange: (e) => { onlyActive = e.target.checked; load(); } }), ' فقط فعال‌ها'),
       count,
+      h('button', { class: 'btn', onclick: importExcel }, 'ورود از Excel'),
+      h('button', { class: 'btn', onclick: () => download('/api/products/export.xlsx') }, 'خروجی Excel'),
+      h('button', { class: 'btn', onclick: () => openShare({ kind: 'products-xlsx', title: 'ارسال فهرست کالاها' }) }, 'ارسال'),
       h('button', { class: 'btn primary', onclick: () => edit(null) }, '+ کالای جدید')),
     h('div', { class: 'tablewrap' }, h('table', { class: 'grid' },
       h('thead', {}, h('tr', {}, ['کد کالا', 'شرح کالا', 'واحد', 'مبلغ واحد (ریال)', 'گروه', 'وضعیت', ''].map((t) => h('th', {}, t)))),

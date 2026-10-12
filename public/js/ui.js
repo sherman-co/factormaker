@@ -1,6 +1,12 @@
 import { toEnDigits, toFaDigits, parseNumber, formatNumber } from '/shared/format.js';
 import * as jalaali from 'jalaali-js';
 
+// replaceChildren/append با null یا false متن «null» می‌نویسند؛ آن‌ها را نادیده بگیر
+for (const m of ['replaceChildren', 'append']) {
+  const orig = Element.prototype[m];
+  Element.prototype[m] = function (...nodes) { return orig.apply(this, nodes.filter((n) => n != null && n !== false)); };
+}
+
 /** ساخت عنصر DOM: h('div', {class:'x', onclick}, child...) */
 export function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
@@ -256,4 +262,20 @@ export function openCalendar(anchor, today) {
   draw();
   document.body.append(box);
   document.addEventListener('mousedown', outside, true);
+}
+
+/** رنگ نوار بالا؛ رنگ متن بر اساس روشنایی انتخاب می‌شود. */
+export function applyTheme(color) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(color || '')) return;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16));
+  const light = (0.299 * r + 0.587 * g + 0.114 * b) > 160;
+  const st = document.documentElement.style;
+  st.setProperty('--topbar', color);
+  st.setProperty('--topbar-ink', light ? '#16202c' : '#ffffff');
+  st.setProperty('--topbar-link', light ? '#3a4658' : '#cfe0f5');
+  st.setProperty('--topbar-hover', light ? 'rgba(0,0,0,.09)' : 'rgba(255,255,255,.14)');
+  try { localStorage.setItem('fm_theme', color); } catch { /* ignore */ }
+}
+export function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(file); });
 }

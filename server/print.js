@@ -72,7 +72,7 @@ function itemRow(it, idx, cols, fs, rowMm) {
 
 function headerBlock(d) {
   return `<div class="box hdr">
-  <div class="hc company">${esc(d.company_title)}</div>
+  <div class="hc company">${d.logo_data_uri ? `<img class="logo" src="${d.logo_data_uri}" alt="">` : esc(d.company_title)}</div>
   <div class="hc title">${esc(d.invoice_title)}</div>
   <div class="hc meta"><div><span>شماره فاکتور:</span><b>${toFaDigits(d.number)}</b></div><div><span>تاریخ:</span><b>${toFaDigits(d.jdate)}</b></div></div>
 </div>`;
@@ -141,6 +141,7 @@ body{font-family:${FONT_STACK};font-size:9pt;color:#111;direction:rtl;-webkit-pr
 .hc{display:flex;align-items:center;justify-content:center;border-left:.5pt solid var(--soft)}
 .hc:last-child{border-left:0}
 .company{width:70mm;font-size:11pt;font-weight:700}
+.logo{max-width:62mm;max-height:11mm;object-fit:contain}
 .title{flex:1;font-size:15pt;font-weight:700}
 .meta{width:70mm;flex-direction:column;align-items:stretch;justify-content:stretch}
 .meta>div{flex:1;display:flex;justify-content:space-between;align-items:center;padding:0 3mm;font-size:9.5pt}
@@ -221,4 +222,10 @@ export function renderInvoiceHtml(d, { embedFonts = false } = {}) {
 export function stampDataUri(file) {
   if (!file || !fs.existsSync(file)) return null;
   return 'data:image/png;base64,' + fs.readFileSync(file).toString('base64');
+}
+
+export function imageDataUri(file) {
+  if (!file || !fs.existsSync(file) || fs.statSync(file).isDirectory()) return null;
+  const mime = /\.jpe?g$/i.test(file) ? 'image/jpeg' : 'image/png';
+  return `data:${mime};base64,` + fs.readFileSync(file).toString('base64');
 }

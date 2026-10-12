@@ -2,10 +2,12 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, firstExisting } from './paths.js';
-import ExcelJS from 'exceljs';
+import { buildInvoicesXlsx, buildProductsXlsx, buildProductsSample, parseProductsXlsx, XLSX_MIME } from './excel.js';
+import { shareTo, platformConfig, PLATFORMS } from './share.js';
+import { checkUpdate, installUpdate } from './update.js';
 import { openDb, tx, getSettings, DEFAULT_SETTINGS } from './db.js';
 import { ensureAdmin, login, logout, userFromToken, parseCookies, setPassword, hashPw } from './auth.js';
-import { renderInvoiceHtml, stampDataUri } from './print.js';
+import { renderInvoiceHtml, stampDataUri, imageDataUri } from './print.js';
 import { htmlToPdf } from './pdf.js';
 import { FONTS_DIR, VAZIR_FILE, fontCss } from './fonts.js';
 import { toEnDigits, parseNumber, normalizeText, calcTotals, lineTotal, amountToWords, groupOfCode } from '../shared/format.js';
@@ -23,7 +25,8 @@ const bad = (m, extra) => new HttpError(400, m, extra);
 const clean = (s) => String(s ?? '').trim();
 const digitsText = (s) => toEnDigits(clean(s)); // شناسه ملی/تلفن: متن با ارقام انگلیسی، صفر اول حفظ
 
-const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS).filter((k) => k !== 'stamp_file' && k !== 'last_invoice_number');
+const SECRET_KEYS = ['tg_token', 'bale_token', 'eitaa_token'];
+const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS).filter((k) => !['stamp_file', 'logo_file', 'last_invoice_number'].includes(k));
 const PAY_LABELS = { card: ['شماره کارت', 'card'], sheba: ['شماره شبا', 'sheba'], account: ['شماره حساب', 'account'] };
 
 export function createApp(dataDir) {
@@ -80,7 +83,9 @@ export function createApp(dataDir) {
   // ---------- تنظیمات ----------
   const publicSettings = () => {
     const s = getSettings(db);
-    return { ...s, has_stamp: !!(s.stamp_file && fs.existsSync(path.join(dataDir, 'stamps', s.stamp_file))) };
+    const out = { ...s, has_stamp: !!(s.stamp_file && fs.existsSync(path.join(dataDir, 'stamps', s.stamp_file))), has_logo: !!(s.logo_file && fs.existsSync(path.join(dataDir, 'logos', s.logo_file))) };
+    for (const k of SECRET_KEYS) { out[k.replace('_token', '_has_token')] = !!s[k]; delete out[k]; } // توکن‌ها هرگز به مرورگر برنمی‌گردند
+    return out;
   };
   app.get('/api/settings', (_q, res) => res.json(publicSettings()));
   app.put('/api/settings', (req, res) => {
@@ -100,7 +105,17 @@ export function createApp(dataDir) {
       if (n === null || n <= 0) throw bad('مدت اعتبار نامعتبر است');
       vals.validity_hours = String(n);
     }
-    for (const k of ['show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
+    for (const k of SECRET_KEYS) if (k in vals && !vals[k]) delete vals[k]; // خالی = بدون تغییر
+    for (const k of SECRET_KEYS) if (b['clear_' + k] === true) vals[k] = '';
+    for (const pf of Object.values(PLATFORMS)) {
+      const bk = `${pf.prefix}_base`;
+      if (vals[bk] && !/^https?:\/\/[^\s]+$/i.test(vals[bk])) throw bad('آدرس API ' + pf.label + ' نامعتبر است');
+      const ck = `${pf.prefix}_chat`;
+      if (ck in vals) vals[ck] = toEnDigits(vals[ck]);
+    }
+    if ('theme_color' in vals && !/^#[0-9a-fA-F]{6}$/.test(vals.theme_color)) throw bad('رنگ نامعتبر است');
+    if ('header_mode' in vals && !['name', 'logo'].includes(vals.header_mode)) throw bad('حالت سربرگ نامعتبر است');
+    for (const k of ['tg_enabled', 'bale_enabled', 'eitaa_enabled', 'show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
     if ('last_invoice_number' in b) {
       const n = parseNumber(b.last_invoice_number);
       if (n === null || !Number.isInteger(n) || n < 0) throw bad('شماره آخرین فاکتور نامعتبر است');
@@ -131,9 +146,34 @@ export function createApp(dataDir) {
     res.type('png').sendFile(p);
   });
 
+  // لوگو (به‌جای نام شرکت در سربرگ چاپی)
+  app.post('/api/settings/logo', (req, res) => {
+    const m = /^data:image\/(png|jpeg);base64,(.+)$/.exec(req.body?.data || '');
+    if (!m) throw bad('فقط PNG یا JPG پذیرفته می‌شود');
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 3 * 1024 * 1024) throw bad('حجم تصویر بیش از ۳ مگابایت است');
+    const sig = buf.subarray(0, 4).toString('hex');
+    if (m[1] === 'png' ? sig !== '89504e47' : !sig.startsWith('ffd8ff')) throw bad('فایل تصویر معتبر نیست');
+    const name = `logo-${Date.now()}.${m[1] === 'png' ? 'png' : 'jpg'}`;
+    fs.writeFileSync(path.join(dataDir, 'logos', name), buf);
+    db.prepare("UPDATE settings SET value=? WHERE key='logo_file'").run(name);
+    res.json(publicSettings());
+  });
+  app.delete('/api/settings/logo', (_q, res) => {
+    db.prepare("UPDATE settings SET value='' WHERE key='logo_file'").run();
+    db.prepare("UPDATE settings SET value='name' WHERE key='header_mode'").run();
+    res.json(publicSettings());
+  });
+  app.get('/api/settings/logo', (_q, res) => {
+    const f = getSettings(db).logo_file;
+    const p = f && path.join(dataDir, 'logos', f);
+    if (!p || !fs.existsSync(p)) throw new HttpError(404, 'لوگویی ثبت نشده است');
+    res.type(path.extname(f)).sendFile(p);
+  });
+
   // ---------- کالاها ----------
   const productOut = (p) => ({ ...p, active: !!p.active, group: groupOfCode(p.code) });
-  function validateProduct(b, id) {
+  function validateProduct(b, id, skipDup = false) {
     const code = toEnDigits(clean(b.code));
     if (!/^\d{3,}$/.test(code)) throw bad('کد کالا باید عددی و حداقل ۳ رقم باشد');
     const description = normalizeText(b.description);
@@ -142,10 +182,54 @@ export function createApp(dataDir) {
     if (!unit) throw bad('واحد الزامی است');
     const price = parseNumber(b.price);
     if (price === null || price < 0 || !Number.isInteger(Math.round(price))) throw bad('مبلغ واحد نامعتبر است');
-    const dup = db.prepare('SELECT id FROM products WHERE code=? AND id IS NOT ?').get(code, id ?? null);
-    if (dup) throw bad('این کد قبلاً ثبت شده است');
+    if (!skipDup) {
+      const dup = db.prepare('SELECT id FROM products WHERE code=? AND id IS NOT ?').get(code, id ?? null);
+      if (dup) throw bad('این کد قبلاً ثبت شده است');
+    }
     return { code, description, unit, price: Math.round(price), active: b.active === false ? 0 : 1 };
   }
+  // ورود/خروج Excel (قبل از مسیرهای :id)
+  app.get('/api/products/export.xlsx', async (_q, res) => {
+    const rows = db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all();
+    sendXlsx(res, await buildProductsXlsx(rows), 'کالاها.xlsx');
+  });
+  app.get('/api/products/template.xlsx', async (_q, res) => sendXlsx(res, await buildProductsSample(), 'نمونه-ورود-کالا.xlsx'));
+  app.post('/api/products/import', async (req, res) => {
+    const m = /^(?:data:[^,]*,)?([A-Za-z0-9+/=\s]+)$/.exec(req.body?.data || '');
+    if (!m) throw bad('فایل Excel ارسال نشده است');
+    const parsed = await parseProductsXlsx(Buffer.from(m[1], 'base64'));
+    if (parsed.error) throw bad(parsed.error);
+    const update = req.body?.mode === 'update';
+    const seen = new Set();
+    const out = [];
+    for (const r of parsed.rows) {
+      const base = { row: r.row, code: r.code, description: r.description };
+      try {
+        const v = validateProduct({ code: r.code, description: r.description, unit: r.unit, price: r.price, active: r.active }, null, true);
+        if (seen.has(v.code)) throw bad('کد تکراری داخل فایل');
+        seen.add(v.code);
+        const ex = db.prepare('SELECT * FROM products WHERE code=?').get(v.code);
+        if (!ex) out.push({ ...base, status: 'new', v });
+        else if (!update) out.push({ ...base, status: 'skip', message: 'از قبل موجود است', v });
+        else if (ex.description === v.description && ex.unit === v.unit && ex.price === v.price && !!ex.active === !!v.active) out.push({ ...base, status: 'same', v });
+        else out.push({ ...base, status: 'update', v, id: ex.id });
+      } catch (e) { out.push({ ...base, status: 'error', message: e.message }); }
+    }
+    const summary = { new: 0, update: 0, same: 0, skip: 0, error: 0 };
+    for (const o of out) summary[o.status]++;
+    if (req.body?.dryRun !== true) {
+      if (summary.error && req.body?.ignoreErrors !== true) throw bad('در فایل ردیف نامعتبر هست؛ اصلاح کنید یا «نادیده گرفتن ردیف‌های خطادار» را بزنید');
+      tx(db, () => {
+        const ins = db.prepare('INSERT INTO products(code,description,unit,price,active) VALUES (?,?,?,?,?)');
+        const upd = db.prepare('UPDATE products SET description=?,unit=?,price=?,active=? WHERE id=?');
+        for (const o of out) {
+          if (o.status === 'new') ins.run(o.v.code, o.v.description, o.v.unit, o.v.price, o.v.active);
+          else if (o.status === 'update') upd.run(o.v.description, o.v.unit, o.v.price, o.v.active, o.id);
+        }
+      });
+    }
+    res.json({ dryRun: req.body?.dryRun === true, summary, rows: out.slice(0, 500).map(({ v, id, ...o }) => o), truncated: out.length > 500 });
+  });
   app.get('/api/products', (req, res) => {
     const q = toEnDigits(clean(req.query.q)).toLowerCase();
     let rows = db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all();
@@ -302,7 +386,7 @@ export function createApp(dataDir) {
   }
 
   function sellerSnapshot(s) {
-    return { ...sellerFrom(s), company_title: s.company_title, title_proforma: s.invoice_title, title_sale: s.invoice_title_sale, show_code: s.show_code_in_print === '1' };
+    return { ...sellerFrom(s), company_title: s.company_title, title_proforma: s.invoice_title, title_sale: s.invoice_title_sale, show_code: s.show_code_in_print === '1', header_mode: s.header_mode, logo_file: s.logo_file };
   }
   /** اطلاعات پرداخت (نسخه‌ی لحظه‌ی ثبت)؛ مقدار قبلیِ همان حساب در همان فاکتور حفظ می‌شود. */
   const parsePay = (json) => {
@@ -376,6 +460,7 @@ export function createApp(dataDir) {
       number: inv.number, jdate: inv.jdate, company_title: seller.company_title,
       invoice_title: inv.doc_type === 'invoice' ? (seller.title_sale || s.invoice_title_sale) : (seller.title_proforma || seller.invoice_title || s.invoice_title),
       pay: parsePay(inv.pay_json).lines,
+      logo_data_uri: seller.header_mode === 'logo' ? imageDataUri(path.join(dataDir, 'logos', seller.logo_file || '')) : null,
       seller: { name: seller.name, national_id: seller.national_id, phone: seller.phone, address: seller.address },
       buyer: { name: inv.buyer_name, national_id: inv.buyer_national_id, phone: inv.buyer_phone, address: inv.buyer_address, reg_no: inv.buyer_reg_no },
       items: inv.items.map((i) => ({ code: i.product_code, description: i.description, qty: i.qty, unit: i.unit, unit_price: i.unit_price, line_total: i.line_total, remark: i.remark })),
@@ -385,6 +470,11 @@ export function createApp(dataDir) {
     };
   }
 
+  const sendXlsx = (res, buf, name) => {
+    res.setHeader('Content-Type', XLSX_MIME);
+    res.setHeader('Content-Disposition', `attachment; filename="export.xlsx"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.send(buf);
+  };
   const safeName = (s) => String(s).replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
   const pdfFileName = (inv) => `${inv.number} - ${safeName(inv.buyer_name) || 'بدون نام'}.pdf`;
   const sendPdf = (res, buf, name, inline) => {
@@ -407,6 +497,13 @@ export function createApp(dataDir) {
     }
   }
 
+  /** ارسال خودکار پس از ثبت نهایی (اگر کاربر پلتفرمی را تیک زده باشد). خطای ارسال، ثبت فاکتور را خراب نمی‌کند. */
+  async function autoShare(body, id) {
+    const platforms = Array.isArray(body?.share?.platforms) ? body.share.platforms : [];
+    if (!platforms.length) return undefined;
+    try { return await shareTo(getSettings(db), platforms, { file: await buildShareFile({ kind: 'invoice', id }) }); } catch (e) { return [{ platform: '-', label: 'ارسال', ok: false, error: e.message }]; }
+  }
+
   const summary = (id) => {
     const inv = loadInvoice(id);
     return { ...inv, seller: inv.seller_json ? JSON.parse(inv.seller_json) : { ...sellerFrom(getSettings(db)) } };
@@ -417,7 +514,7 @@ export function createApp(dataDir) {
     const n = normalizeInvoice(req.body || {}, { final });
     const id = saveInvoice(null, n, { final, copiedFrom: req.body?.copied_from });
     if (final) await finalizeWithPdf(id);
-    res.status(201).json(summary(id));
+    res.status(201).json({ ...summary(id), share_results: final ? await autoShare(req.body, id) : undefined });
   });
   app.put('/api/invoices/:id', async (req, res) => {
     const id = Number(req.params.id);
@@ -427,7 +524,7 @@ export function createApp(dataDir) {
     const n = normalizeInvoice(req.body || {}, { final, existing: cur });
     saveInvoice(id, n, { final, existing: cur });
     if (final) await finalizeWithPdf(id);
-    res.json(summary(id));
+    res.json({ ...summary(id), share_results: final ? await autoShare(req.body, id) : undefined });
   });
   app.delete('/api/invoices/:id', (req, res) => {
     const inv = loadInvoice(Number(req.params.id));
@@ -452,26 +549,7 @@ export function createApp(dataDir) {
   });
 
   app.get('/api/invoices/export.xlsx', async (req, res) => {
-    const rows = queryInvoices(req.query, { all: true }).rows;
-    const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet('فاکتورها', { views: [{ rightToLeft: true, state: 'frozen', ySplit: 1 }] });
-    ws.columns = [
-      { header: 'شماره', key: 'number', width: 12 }, { header: 'نوع', key: 'type', width: 12 }, { header: 'تاریخ', key: 'jdate', width: 12 },
-      { header: 'خریدار', key: 'buyer_name', width: 28 }, { header: 'شناسه ملی خریدار', key: 'nid', width: 18 },
-      { header: 'جمع کل (ریال)', key: 'subtotal', width: 20 }, { header: 'تخفیف (ریال)', key: 'discount', width: 16 },
-      { header: 'مالیات (ریال)', key: 'tax_amount', width: 16 }, { header: 'مبلغ قابل پرداخت (ریال)', key: 'payable', width: 24 },
-      { header: 'وضعیت', key: 'status', width: 10 },
-    ];
-    ws.getRow(1).font = { bold: true };
-    for (const r of rows) {
-      ws.addRow({ ...r, type: r.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور', nid: r.buyer_national_id, status: r.status === 'final' ? 'نهایی' : 'پیش‌نویس' });
-    }
-    for (const k of ['subtotal', 'discount', 'tax_amount', 'payable']) ws.getColumn(k).numFmt = '#,##0';
-    ws.getColumn('nid').numFmt = '@';
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="invoices.xlsx"; filename*=UTF-8''${encodeURIComponent('فهرست-فاکتورها.xlsx')}`);
-    await wb.xlsx.write(res);
-    res.end();
+    sendXlsx(res, await buildInvoicesXlsx(queryInvoices(req.query, { all: true }).rows), 'فهرست-فاکتورها.xlsx');
   });
 
   function queryInvoices(q, { all = false } = {}) {
@@ -513,22 +591,63 @@ export function createApp(dataDir) {
 
   app.get('/api/invoices/:id', (req, res) => res.json(summary(Number(req.params.id))));
 
+  /** PDF نهایی ذخیره‌شده؛ برای پیش‌نویس همان لحظه ساخته می‌شود. */
+  async function invoicePdf(inv) {
+    if (inv.status === 'final' && inv.pdf_file && fs.existsSync(path.join(dataDir, 'pdfs', inv.pdf_file))) return fs.readFileSync(path.join(dataDir, 'pdfs', inv.pdf_file));
+    return htmlToPdf(renderInvoiceHtml(renderData(inv), { embedFonts: true }));
+  }
   app.get('/api/invoices/:id/pdf', async (req, res) => {
     const inv = loadInvoice(Number(req.params.id));
-    const inline = req.query.inline === '1';
-    if (inv.status === 'final' && inv.pdf_file && fs.existsSync(path.join(dataDir, 'pdfs', inv.pdf_file))) {
-      return sendPdf(res, fs.readFileSync(path.join(dataDir, 'pdfs', inv.pdf_file)), pdfFileName(inv), inline);
+    sendPdf(res, await invoicePdf(inv), pdfFileName(inv), req.query.inline === '1');
+  });
+
+  // ---------- اشتراک‌گذاری (تلگرام / بله / ایتا) ----------
+  const fmtMoney = (n) => new Intl.NumberFormat('fa-IR').format(n);
+  async function buildShareFile(b) {
+    if (b.kind === 'invoice') {
+      const inv = loadInvoice(Number(b.id));
+      const typ = inv.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور';
+      return { buffer: await invoicePdf(inv), filename: pdfFileName(inv), mime: 'application/pdf',
+        caption: b.caption ?? `${typ} شماره ${fmtMoney(inv.number).replace(/٬/g, '')}\n${inv.buyer_name || ''}\nمبلغ قابل پرداخت: ${fmtMoney(inv.payable)} ریال` };
     }
-    const pdf = await htmlToPdf(renderInvoiceHtml(renderData(inv), { embedFonts: true }));
-    sendPdf(res, pdf, pdfFileName(inv), inline);
+    if (b.kind === 'invoices-xlsx') return { buffer: await buildInvoicesXlsx(queryInvoices(b.query || {}, { all: true }).rows), filename: 'فهرست-فاکتورها.xlsx', mime: XLSX_MIME, caption: b.caption ?? 'فهرست فاکتورها' };
+    if (b.kind === 'products-xlsx') return { buffer: await buildProductsXlsx(db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all()), filename: 'کالاها.xlsx', mime: XLSX_MIME, caption: b.caption ?? 'فهرست کالاها' };
+    throw bad('نوع خروجی نامعتبر است');
+  }
+  app.get('/api/share/platforms', (_q, res) => {
+    const s = getSettings(db);
+    res.json(Object.keys(PLATFORMS).map((k) => { const c = platformConfig(s, k); return { key: k, label: c.label, ready: c.enabled && !!c.token && c.chats.length > 0 }; }));
+  });
+  app.post('/api/share', async (req, res) => {
+    const platforms = Array.isArray(req.body?.platforms) ? req.body.platforms : [];
+    if (!platforms.length) throw bad('حداقل یک پلتفرم را انتخاب کنید');
+    const file = await buildShareFile(req.body);
+    res.json({ results: await shareTo(getSettings(db), platforms, { file }) });
+  });
+  app.post('/api/share/test', async (req, res) => {
+    const results = await shareTo({ ...getSettings(db), [`${PLATFORMS[req.body?.platform]?.prefix}_enabled`]: '1' }, [req.body?.platform], { text: 'پیام آزمایشی از پنل پیش‌فاکتور ✅' });
+    res.json({ results });
+  });
+
+  // ---------- به‌روزرسانی ----------
+  app.get('/api/update/check', async (_q, res) => res.json(await checkUpdate(VERSION)));
+  app.post('/api/update/install', async (req, res) => {
+    if (req.body?.confirm !== true) throw bad('تأیید کاربر لازم است');
+    const info = await installUpdate({ backup: () => backupDb('pre-update-v' + VERSION) }).catch((e) => { throw bad(e.message); });
+    res.json({ ok: true, version: info.version });
+    setTimeout(() => process.emit('fm-shutdown'), 800);
   });
 
   // ---------- بکاپ ----------
-  app.get('/api/backup', (_req, res) => {
+  function backupDb(label = 'factormaker') {
     const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
-    const file = path.join(dataDir, 'backups', `factormaker-${stamp}.db`);
+    const file = path.join(dataDir, 'backups', `${label}-${stamp}.db`);
     if (fs.existsSync(file)) fs.rmSync(file);
     db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    return file;
+  }
+  app.get('/api/backup', (_req, res) => {
+    const file = backupDb();
     res.download(file, path.basename(file));
   });
 

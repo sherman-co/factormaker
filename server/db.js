@@ -17,6 +17,12 @@ export const DEFAULT_SETTINGS = {
   show_code_in_print: '0',
   stamp_in_pdf: '0',
   stamp_file: '',
+  logo_file: '',
+  header_mode: 'name', // name | logo : نام شرکت یا لوگو در سربرگ چاپی
+  theme_color: '#16314f',
+  tg_enabled: '0', tg_token: '', tg_chat: '', tg_base: '',
+  bale_enabled: '0', bale_token: '', bale_chat: '', bale_base: '',
+  eitaa_enabled: '0', eitaa_token: '', eitaa_chat: '', eitaa_base: '',
 };
 
 const SCHEMA = `
@@ -64,7 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_invoices_date ON invoices(jdate);
 
 export function openDb(dataDir) {
   fs.mkdirSync(dataDir, { recursive: true });
-  for (const d of ['pdfs', 'stamps', 'backups']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
+  for (const d of ['pdfs', 'stamps', 'logos', 'backups']) fs.mkdirSync(path.join(dataDir, d), { recursive: true });
   const db = new DatabaseSync(path.join(dataDir, 'factormaker.db'));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);

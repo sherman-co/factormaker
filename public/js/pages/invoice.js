@@ -1,6 +1,7 @@
 import { get, post, put, del, ApiError } from '../api.js';
 import { h, toast, modal, confirmBox, bindNumber, numValue, setNum, bindDigitsText, digitsValue, setDigits, autocomplete, bindDate, download } from '../ui.js';
 import { todayJalali } from '/shared/jdate.js';
+import { openShare, autoShareBox, reportShare } from '../share.js';
 import { formatNumber, toFaDigits, toEnDigits, calcTotals, lineTotal, amountToWords, normalizeSearch, groupOfCode, DOC_TYPES } from '/shared/format.js';
 
 export async function invoicePage(root, idParam) {
@@ -196,7 +197,8 @@ export async function invoicePage(root, idParam) {
     if (e.data?.errors?.length > 1) toast(e.data.errors.slice(1, 4).join(' | '), 'error');
   }
   async function save(finalize) {
-    const body = payload({ finalize, ...(srcId ? { copied_from: srcId } : {}) });
+    const platforms = (finalize || isFinal) ? autoShare.selected() : [];
+    const body = payload({ finalize, ...(srcId ? { copied_from: srcId } : {}), ...(platforms.length ? { share: { platforms } } : {}) });
     const res = inv ? await put('/api/invoices/' + inv.id, body) : await post('/api/invoices', body);
     return res;
   }
@@ -208,10 +210,10 @@ export async function invoicePage(root, idParam) {
   }) }, 'ذخیره پیش‌نویس');
   const btnFinal = h('button', { class: 'btn primary', onclick: guard(async () => {
     if (!(await confirmBox('فاکتور نهایی و PDF آن ذخیره می‌شود (بعداً هم می‌توانید آن را ویرایش کنید). ادامه می‌دهید؟', 'ثبت نهایی'))) return;
-    const r = await save(true); toast('فاکتور نهایی شد', 'ok'); if (inv && String(inv.id) === String(r.id)) location.reload(); else location.hash = '#/invoice/' + r.id;
+    const r = await save(true); toast('فاکتور نهایی شد', 'ok'); reportShare(r.share_results); if (inv && String(inv.id) === String(r.id)) location.reload(); else location.hash = '#/invoice/' + r.id;
   }) }, 'ثبت نهایی');
   const btnSaveFinal = h('button', { class: 'btn primary', onclick: guard(async () => {
-    const r = await save(false); inv = r; toast('تغییرات ذخیره و PDF دوباره ساخته شد', 'ok');
+    const r = await save(false); inv = r; toast('تغییرات ذخیره و PDF دوباره ساخته شد', 'ok'); reportShare(r.share_results);
   }) }, 'ذخیره تغییرات');
   const btnToDraft = h('button', { class: 'btn', onclick: guard(async () => {
     if (!(await confirmBox('فاکتور به حالت پیش‌نویس برگردد؟', 'برگردان'))) return;
@@ -234,6 +236,11 @@ export async function invoicePage(root, idParam) {
     if (!inv) { inv = r; history.replaceState(null, '', '#/invoice/' + r.id); } else inv = r;
     download(`/api/invoices/${r.id}/pdf`); toast('ذخیره شد و PDF آماده است', 'ok');
   }) }, 'دانلود PDF');
+  const btnShare = h('button', { class: 'btn', onclick: guard(async () => {
+    const r = await save(false); // ابتدا ذخیره (نهایی‌ها نهایی می‌مانند)
+    if (!inv) { inv = r; history.replaceState(null, '', '#/invoice/' + r.id); } else inv = r;
+    openShare({ kind: 'invoice', id: r.id, title: `ارسال ${DOC_TYPES[docType]} ${toFaDigits(r.number)}` });
+  }) }, 'ارسال');
   const btnCopy = h('button', { class: 'btn', onclick: guard(async () => {
     if (!inv) { toast('ابتدا فاکتور را ذخیره کنید', 'error'); return; }
     const c = await post(`/api/invoices/${inv.id}/copy`); toast('فاکتور جدید ساخته شد', 'ok'); location.hash = '#/invoice/' + c.id;
@@ -253,6 +260,7 @@ export async function invoicePage(root, idParam) {
     if (t) t.textContent = isNew ? `صدور ${DOC_TYPES[docType]} جدید` : `${DOC_TYPES[docType]} شماره ${toFaDigits(inv.number)}`;
   };
   const defaultNotes = (t) => (t === 'invoice' ? settings.default_notes.replace('پیش‌فاکتور', 'فاکتور') : settings.default_notes);
+  const autoShare = await autoShareBox();
   const sellerLine = inv?.seller || { name: settings.seller_name, national_id: settings.seller_national_id, phone: settings.seller_phone, address: settings.seller_address };
 
   root.append(h('div', { class: 'wrap' },
@@ -285,7 +293,7 @@ export async function invoicePage(root, idParam) {
           h('div', { class: 'trow' }, h('span', {}, 'درصد مالیات بر ارزش افزوده'), taxPct),
           taxAmtRow,
           h('div', { class: 'trow pay' }, h('span', {}, 'مبلغ قابل پرداخت (ریال)'), payEl))),
-      h('div', { class: 'btnbar' }, isFinal ? [btnSaveFinal, btnToDraft] : [btnDraft, btnFinal], btnPreview, btnPdf, btnCopy, btnDel))));
+      h('div', { class: 'btnbar' }, isFinal ? [btnSaveFinal, btnToDraft] : [btnDraft, btnFinal], btnPreview, btnPdf, btnShare, btnCopy, btnDel), autoShare.el ? h('div', { style: 'margin-top:10px' }, autoShare.el) : null)));
   paintDoc();
   paintPay();
   recalc();

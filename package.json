@@ -1,7 +1,7 @@
 {
   "name": "factormaker",
-  "version": "1.2.2",
-  "description": "پنل صدور پیش‌فاکتور فروش",
+  "version": "1.3.0",
+  "description": "پنل تحت وب صدور پیش‌فاکتور و فاکتور فروش (فارسی، RTL) با PDF، بایگانی، Excel و ارسال به تلگرام/بله/ایتا",
   "type": "module",
   "private": true,
   "engines": {
@@ -16,6 +16,7 @@
   "dependencies": {
     "exceljs": "^4.4.0",
     "express": "^5.3.0",
+    "fflate": "^0.8.3",
     "jalaali-js": "^2.0.1",
     "puppeteer": "^25.13.0",
     "vazirmatn": "^33.0.3"

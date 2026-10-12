@@ -36,6 +36,9 @@ jobs:
             Write-Host "----- exe stderr -----"; Get-Content "$PWD/exe-err.log" -ErrorAction SilentlyContinue
           }
           if ($code -ne 0) { throw "smoke failed" }
+      - name: Update flow smoke test (fake GitHub)
+        shell: pwsh
+        run: node scripts/update-smoke.mjs
       - name: Package
         shell: pwsh
         run: |

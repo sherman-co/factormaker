@@ -1,6 +1,7 @@
 import { get, put, post, del } from '../api.js';
 import { h, toast, modal, confirmBox, bindNumber, numValue, setNum, bindDigitsText, digitsValue, download } from '../ui.js';
 import { toFaDigits } from '/shared/format.js';
+import { buildExtraSettings } from './settings-extra.js';
 
 export async function settingsPage(root) {
   const s = await get('/api/settings');
@@ -25,9 +26,10 @@ export async function settingsPage(root) {
   setNum(f.default_tax_percent, Number(s.default_tax_percent));
   setNum(f.validity_hours, Number(s.validity_hours));
 
-  async function save() {
+  async function save(silent = false) {
     try {
       await put('/api/settings', {
+        ...extra.collect(),
         company_title: f.company_title.value, invoice_title: f.invoice_title.value, invoice_title_sale: f.invoice_title_sale.value,
         seller_name: f.seller_name.value,
         seller_national_id: digitsValue(f.seller_national_id), seller_phone: digitsValue(f.seller_phone), seller_address: f.seller_address.value,
@@ -35,7 +37,7 @@ export async function settingsPage(root) {
         validity_hours: numValue(f.validity_hours) ?? 24, default_notes: f.default_notes.value,
         show_code_in_print: f.show_code.checked, stamp_in_pdf: f.stamp_in_pdf.checked,
       });
-      toast('تنظیمات ذخیره شد', 'ok');
+      if (silent !== true) toast('تنظیمات ذخیره شد', 'ok');
     } catch (e) { toast(e.message, 'error'); }
   }
 
@@ -45,6 +47,7 @@ export async function settingsPage(root) {
     f.default_notes.value = `مدت اعتبار این پیش‌فاکتور ${toFaDigits(n)} ساعت از تاریخ صدور است.`;
   } }, 'ساخت متن توضیحات از مدت اعتبار');
 
+  const extra = buildExtraSettings(s, { version: ver, onSaved: save });
   const stampBox = h('div');
   function paintStamp(has) {
     stampBox.replaceChildren(
@@ -114,11 +117,11 @@ export async function settingsPage(root) {
       h('div', { style: 'margin-top:12px' }, h('label', {}, f.show_code, ' نمایش ستون «کد کالا» در نسخه چاپی/PDF')),
       h('div', { class: 'btnbar' }, h('button', { class: 'btn primary', onclick: save }, 'ذخیره تنظیمات'))),
     accountsCard,
+    ...extra.cards,
     h('div', { class: 'card' }, h('h2', {}, 'تصویر مهر شرکت'),
       h('p', { class: 'muted' }, 'فایل PNG با پس‌زمینه شفاف بارگذاری کنید.'), stampBox,
       h('div', { style: 'margin-top:10px' }, h('label', {}, f.stamp_in_pdf, ' درج مهر در PDF (پیش‌فرض برای فاکتورهای جدید)')),
       h('div', { class: 'btnbar' }, h('button', { class: 'btn primary', onclick: save }, 'ذخیره'))),
-    h('div', { class: 'card' }, h('h2', {}, 'درباره‌ی برنامه'), h('p', {}, 'نسخه‌ی برنامه: ', h('b', { class: 'num', style: 'direction:ltr;display:inline-block' }, ver))),
     h('div', { class: 'card' }, h('h2', {}, 'بکاپ'),
       h('p', { class: 'muted' }, 'فایل دیتابیس را دانلود کنید. برای بکاپ کامل (شامل PDFها) کل پوشه data را کپی کنید.'),
       h('button', { class: 'btn', onclick: () => download('/api/backup') }, 'دانلود بکاپ دیتابیس')),

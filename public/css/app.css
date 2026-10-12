@@ -3,10 +3,10 @@
 html,body{margin:0;background:var(--bg);color:var(--ink);font-family:"B Yekan","Vazirmatn",Tahoma,sans-serif;font-size:15px}
 a{color:var(--primary);text-decoration:none}
 button,input,select,textarea{font:inherit;color:inherit}
-.topbar{background:#16314f;color:#fff;display:flex;align-items:center;gap:6px;padding:0 16px;height:52px;position:sticky;top:0;z-index:20;overflow-x:auto}
+.topbar{background:var(--topbar,#16314f);color:var(--topbar-ink,#fff);display:flex;align-items:center;gap:6px;padding:0 16px;height:52px;position:sticky;top:0;z-index:20;overflow-x:auto}
 .topbar .brand{font-weight:700;font-size:17px;margin-inline-end:18px;white-space:nowrap}
-.topbar a{color:#cfe0f5;padding:8px 12px;border-radius:6px;white-space:nowrap}
-.topbar a.active,.topbar a:hover{background:rgba(255,255,255,.14);color:#fff}
+.topbar a{color:var(--topbar-link,#cfe0f5);padding:8px 12px;border-radius:6px;white-space:nowrap}
+.topbar a.active,.topbar a:hover{background:var(--topbar-hover,rgba(255,255,255,.14));color:var(--topbar-ink,#fff)}
 .topbar .sp{flex:1}
 .wrap{max-width:1280px;margin:18px auto;padding:0 16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
@@ -87,5 +87,13 @@ table.grid tr:hover td{background:#f8fafc}
 .doc-switch button.on{background:var(--primary);color:#fff}
 .payopts{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
 .tag.pro{background:#e6eefb;color:#1f5fae}.tag.inv{background:#f2e6fb;color:#6b2fa5}
-.topbar .ver{font-size:11px;color:#8fb0d6;margin-inline-start:8px;font-weight:400}
-.topbar .clock{background:rgba(255,255,255,.1);color:#fff;font-variant-numeric:tabular-nums}
+.topbar .ver{font-size:11px;opacity:.7;margin-inline-start:8px;font-weight:400}
+.topbar .clock{background:var(--topbar-hover,rgba(255,255,255,.1));color:var(--topbar-ink,#fff);font-variant-numeric:tabular-nums}
+
+.topbar .upd{background:#ffb703;color:#2b1d00 !important;font-weight:700;font-size:13px}
+.swatches{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.swatches button{width:30px;height:30px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--line);cursor:pointer}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.pf{border:1px solid var(--line);border-radius:10px;padding:12px}
+.pf h3{margin:0 0 8px;font-size:15px}
+.notes-box{background:#f7f9fb;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;max-height:160px;overflow:auto;margin-top:8px}
