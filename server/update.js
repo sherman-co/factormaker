@@ -90,13 +90,10 @@ export async function installUpdate({ backup }) {
     // وگرنه cmd خطوط بعدی را پیدا نمی‌کند و برنامه‌ی جدید اجرا نمی‌شود.
     fs.writeFileSync(script, [
       '@echo off',
-      `set PID=${process.pid}`,
-      `echo [%date% %time%] waiting for old process %PID% >> "${log}"`,
-      ':wait',
-      'tasklist /FI "PID eq %PID%" /NH 2>nul | find "%PID%" >nul',
-      'if not errorlevel 1 (ping -n 2 127.0.0.1 >nul & goto wait)',
-      `echo [%date% %time%] old process gone, copying files >> "${log}"`,
-      `robocopy "${newDir}" "${ROOT}" /E /R:15 /W:1 /NFL /NDL /NJH /NJS /NP >> "${log}" 2>&1`,
+      `echo [%date% %time%] update started (old process ${process.pid}) >> "${log}"`,
+      // چند ثانیه صبر تا برنامه‌ی فعلی بسته شود؛ اگر فایل exe هنوز قفل بود، خود robocopy تا آزاد شدن دوباره تلاش می‌کند
+      'ping -n 4 127.0.0.1 >nul',
+      `robocopy "${newDir}" "${ROOT}" /E /R:90 /W:1 /NFL /NDL /NJH /NJS /NP >> "${log}" 2>&1`,
       'set RC=%ERRORLEVEL%',
       `echo [%date% %time%] robocopy exit code %RC% >> "${log}"`,
       `if %RC% GEQ 8 (echo UPDATE FAILED >> "${log}" & exit /b 1)`,

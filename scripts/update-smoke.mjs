@@ -13,7 +13,7 @@ const src = path.resolve('release/FactorMaker');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'fm-upd-'));
 const app = path.join(work, 'app');
 fs.cpSync(src, app, { recursive: true, filter: (f) => !/[\\/]data([\\/]|$)/.test(f.slice(src.length)) }); // بدون data مانده از آزمون قبلی
-const must = (c, m) => { if (!c) { console.error('UPDATE SMOKE FAIL:', m); process.exit(1); } console.log('ok -', m); };
+const must = (c, m) => { if (!c) throw new Error('UPDATE SMOKE FAIL: ' + m); console.log('ok -', m); };
 
 // بسته‌ی «نسخه‌ی جدید»: همان فایل‌ها با package.json نسخه‌ی ۹٫۹٫۹
 const files = {};
