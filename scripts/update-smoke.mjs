@@ -12,12 +12,12 @@ const exeName = process.platform === 'win32' ? 'FactorMaker.exe' : 'FactorMaker'
 const src = path.resolve('release/FactorMaker');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'fm-upd-'));
 const app = path.join(work, 'app');
-fs.cpSync(src, app, { recursive: true });
+fs.cpSync(src, app, { recursive: true, filter: (f) => !/[\\/]data([\\/]|$)/.test(f.slice(src.length)) }); // بدون data مانده از آزمون قبلی
 const must = (c, m) => { if (!c) { console.error('UPDATE SMOKE FAIL:', m); process.exit(1); } console.log('ok -', m); };
 
 // بسته‌ی «نسخه‌ی جدید»: همان فایل‌ها با package.json نسخه‌ی ۹٫۹٫۹
 const files = {};
-const walk = (d, rel = 'FactorMaker') => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p, rel + '/' + e.name); else files[rel + '/' + e.name] = new Uint8Array(fs.readFileSync(p)); } };
+const walk = (d, rel = 'FactorMaker') => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.name === 'data' && rel === 'FactorMaker') continue; const p = path.join(d, e.name); if (e.isDirectory()) walk(p, rel + '/' + e.name); else files[rel + '/' + e.name] = new Uint8Array(fs.readFileSync(p)); } };
 walk(src);
 files['FactorMaker/package.json'] = new Uint8Array(Buffer.from(JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8')), version: '9.9.9' })));
 const zip = Buffer.from(zipSync(files, { level: 1 }));

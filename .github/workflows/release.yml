@@ -12,8 +12,8 @@ jobs:
   windows-exe:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Install
@@ -44,7 +44,7 @@ jobs:
         run: |
           Remove-Item -Recurse -Force release/FactorMaker/data -ErrorAction SilentlyContinue
           Compress-Archive -Path release/FactorMaker -DestinationPath FactorMaker-win-x64.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: FactorMaker-win-x64
           path: FactorMaker-win-x64.zip

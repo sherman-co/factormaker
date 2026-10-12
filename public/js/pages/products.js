@@ -1,18 +1,37 @@
 import { get, post, put, del } from '../api.js';
 import { h, toast, modal, bindNumber, numValue, setNum, bindDigitsText, digitsValue, confirmBox, download, readFileAsDataURL } from '../ui.js';
 import { openShare } from '../share.js';
+import { pending } from '../state.js';
 import { formatNumber, toFaDigits, toEnDigits, groupOfCode } from '/shared/format.js';
 
 export async function productsPage(root) {
   let rows = [];
   let q = '';
   let onlyActive = false;
+  const selected = new Set(); // کدهای تیک‌خورده (ماندگار بین جست‌وجوها)
   const tbody = h('tbody');
   const count = h('span', { class: 'muted' });
+  const allBox = h('input', { type: 'checkbox', title: 'انتخاب همه‌ی کالاهای فعالِ نمایش‌داده‌شده', onchange: (e) => {
+    for (const p of rows.filter((x) => x.active)) e.target.checked ? selected.add(p.code) : selected.delete(p.code);
+    load();
+  } });
+  const bar = h('div', { class: 'selbar' });
+  function paintBar() {
+    if (!selected.size) { bar.style.display = 'none'; return; }
+    bar.style.display = 'flex';
+    bar.replaceChildren(
+      h('b', {}, toFaDigits(selected.size) + ' کالا انتخاب شد'),
+      h('button', { class: 'btn primary', onclick: () => {
+        pending.codes = [...selected];
+        location.hash = '#/invoice/new';
+      } }, 'افزودن به فاکتور جدید ←'),
+      h('button', { class: 'btn', onclick: () => { selected.clear(); load(); } }, 'پاک کردن انتخاب'));
+  }
 
   async function load() {
     rows = await get('/api/products?q=' + encodeURIComponent(q) + (onlyActive ? '&active=1' : ''));
     tbody.replaceChildren(...rows.map((p) => h('tr', {},
+      h('td', { style: 'width:34px;text-align:center' }, h('input', { type: 'checkbox', disabled: !p.active, title: p.active ? '' : 'کالای غیرفعال', checked: selected.has(p.code), onchange: (e) => { e.target.checked ? selected.add(p.code) : selected.delete(p.code); paintBar(); } })),
       h('td', { class: 'num' }, toFaDigits(p.code)),
       h('td', {}, p.description),
       h('td', {}, p.unit),
@@ -24,6 +43,8 @@ export async function productsPage(root) {
         h('button', { class: 'btn small', onclick: () => toggle(p) }, p.active ? 'غیرفعال کردن' : 'فعال کردن'), ' ',
         h('button', { class: 'btn small danger', onclick: () => remove(p) }, 'حذف')))));
     count.textContent = toFaDigits(rows.length) + ' کالا';
+    allBox.checked = rows.some((p) => p.active) && rows.filter((p) => p.active).every((p) => selected.has(p.code));
+    paintBar();
   }
 
   async function toggle(p) {
@@ -116,7 +137,7 @@ export async function productsPage(root) {
       h('button', { class: 'btn', onclick: () => openShare({ kind: 'products-xlsx', title: 'ارسال فهرست کالاها' }) }, 'ارسال'),
       h('button', { class: 'btn primary', onclick: () => edit(null) }, '+ کالای جدید')),
     h('div', { class: 'tablewrap' }, h('table', { class: 'grid' },
-      h('thead', {}, h('tr', {}, ['کد کالا', 'شرح کالا', 'واحد', 'مبلغ واحد (ریال)', 'گروه', 'وضعیت', ''].map((t) => h('th', {}, t)))),
-      tbody)))));
+      h('thead', {}, h('tr', {}, h('th', { style: 'width:34px;text-align:center' }, allBox), ...['کد کالا', 'شرح کالا', 'واحد', 'مبلغ واحد (ریال)', 'گروه', 'وضعیت', ''].map((t) => h('th', {}, t)))),
+      tbody))), bar));
   load();
 }

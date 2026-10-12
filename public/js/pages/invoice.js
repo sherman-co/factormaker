@@ -1,6 +1,7 @@
 import { get, post, put, del, ApiError } from '../api.js';
 import { h, toast, modal, confirmBox, bindNumber, numValue, setNum, bindDigitsText, digitsValue, setDigits, autocomplete, bindDate, download } from '../ui.js';
 import { todayJalali } from '/shared/jdate.js';
+import { pending } from '../state.js';
 import { openShare, autoShareBox, reportShare } from '../share.js';
 import { formatNumber, toFaDigits, toEnDigits, calcTotals, lineTotal, amountToWords, normalizeSearch, groupOfCode, DOC_TYPES } from '/shared/format.js';
 
@@ -120,6 +121,7 @@ export async function invoicePage(root, idParam) {
     });
     r.code = init.code || '';
     if (init.code) code.value = toFaDigits(init.code);
+    if (init.code && init.unit_price == null && byCode.get(init.code)) { init.unit_price = byCode.get(init.code).price; }
     if (init.qty != null && init.qty !== '') setNum(qty, init.qty);
     if (init.unit_price != null) setNum(price, init.unit_price);
     r.qty = init.qty ?? ''; r.price = init.unit_price ?? null;
@@ -160,12 +162,17 @@ export async function invoicePage(root, idParam) {
   }
 
   // مقادیر اولیه
+  let prefilled = 0;
   if (inv) {
     setNum(discount, inv.discount); setNum(taxPct, inv.tax_percent); notes.value = inv.notes;
     rows = inv.items.map((i) => makeRow({ code: i.product_code, qty: i.qty, unit_price: i.unit_price, remark: i.remark, edited: i.unit_price !== i.list_price, stored: { description: i.description, unit: i.unit, list_price: i.list_price } }));
   } else {
     setNum(discount, 0); setNum(taxPct, Number(settings.default_tax_percent)); notes.value = settings.default_notes;
-    rows = Array.from({ length: 3 }, () => makeRow());
+    if (pending.codes.length) {
+      rows = pending.codes.map((code) => makeRow({ code }));
+      prefilled = pending.codes.length;
+      pending.codes = [];
+    } else rows = Array.from({ length: 3 }, () => makeRow());
   }
   paintRows();
 
@@ -296,6 +303,7 @@ export async function invoicePage(root, idParam) {
       h('div', { class: 'btnbar' }, isFinal ? [btnSaveFinal, btnToDraft] : [btnDraft, btnFinal], btnPreview, btnPdf, btnShare, btnCopy, btnDel), autoShare.el ? h('div', { style: 'margin-top:10px' }, autoShare.el) : null)));
   paintDoc();
   paintPay();
+  if (prefilled) { toast(`${toFaDigits(prefilled)} کالا اضافه شد؛ مقدارها را وارد کنید`, 'ok'); rows[0]?.qtyEl.focus(); }
   recalc();
-  if (isNew) rows[0].codeEl.focus();
+  if (isNew && !prefilled) rows[0].codeEl.focus();
 }

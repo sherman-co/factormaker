@@ -97,3 +97,7 @@ table.grid tr:hover td{background:#f8fafc}
 .pf{border:1px solid var(--line);border-radius:10px;padding:12px}
 .pf h3{margin:0 0 8px;font-size:15px}
 .notes-box{background:#f7f9fb;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;max-height:160px;overflow:auto;margin-top:8px}
+
+.selbar{position:fixed;bottom:16px;inset-inline:0;margin:0 auto;width:fit-content;max-width:calc(100% - 24px);background:#1c2430;color:#fff;border-radius:14px;padding:10px 16px;gap:12px;align-items:center;box-shadow:0 10px 30px rgba(0,0,0,.35);z-index:30;flex-wrap:wrap;justify-content:center}
+.selbar .btn:not(.primary){background:transparent;color:#fff;border:1px solid rgba(255,255,255,.35)}
+.selbar .btn:not(.primary):hover{background:rgba(255,255,255,.12)}
