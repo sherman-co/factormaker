@@ -36,18 +36,27 @@ jobs:
             Write-Host "----- exe stderr -----"; Get-Content "$PWD/exe-err.log" -ErrorAction SilentlyContinue
           }
           if ($code -ne 0) { throw "smoke failed" }
-      - name: Update flow smoke test (fake GitHub)
+      - name: Update flow smoke test (fake GitHub, public repo)
         shell: pwsh
+        run: node scripts/update-smoke.mjs
+      - name: Update flow smoke test (fake GitHub, private repo with token)
+        shell: pwsh
+        env:
+          SMOKE_MODE: token
         run: node scripts/update-smoke.mjs
       - name: Package
         shell: pwsh
         run: |
           Remove-Item -Recurse -Force release/FactorMaker/data -ErrorAction SilentlyContinue
           Compress-Archive -Path release/FactorMaker -DestinationPath FactorMaker-win-x64.zip
+          $h = (Get-FileHash FactorMaker-win-x64.zip -Algorithm SHA256).Hash.ToLower()
+          "$h  FactorMaker-win-x64.zip" | Out-File -FilePath FactorMaker-win-x64.zip.sha256 -Encoding ascii
       - uses: actions/upload-artifact@v6
         with:
           name: FactorMaker-win-x64
-          path: FactorMaker-win-x64.zip
+          path: |
+            FactorMaker-win-x64.zip
+            FactorMaker-win-x64.zip.sha256
       - name: Publish release
         shell: pwsh
         env:
@@ -56,5 +65,5 @@ jobs:
           $ver = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $tag = "v$ver"
           gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) { gh release upload $tag FactorMaker-win-x64.zip --clobber }
-          else { gh release create $tag FactorMaker-win-x64.zip --target "${{ github.sha }}" --title "FactorMaker $tag" --notes "نسخه‌ی اجرایی ویندوز: فایل zip را باز کنید و FactorMaker.exe را اجرا کنید. راهنما: README.txt داخل zip. ساخت PDF به Chrome یا Edge نیاز دارد." }
+          if ($LASTEXITCODE -eq 0) { gh release upload $tag FactorMaker-win-x64.zip FactorMaker-win-x64.zip.sha256 --clobber }
+          else { gh release create $tag FactorMaker-win-x64.zip FactorMaker-win-x64.zip.sha256 --target "${{ github.sha }}" --title "FactorMaker $tag" --notes "نسخه‌ی اجرایی ویندوز: فایل zip را باز کنید و FactorMaker.exe را اجرا کنید. راهنما: README.txt داخل zip. ساخت PDF به Chrome یا Edge نیاز دارد." }

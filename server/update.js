@@ -3,16 +3,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { fetch } from 'undici';
+import { proxyDispatcher } from './share.js';
 import { unzipSync } from 'fflate';
 import { ROOT, SEA } from './paths.js';
 
+// بدون استفاده از API گیت‌هاب (که سهمیه‌ی ۶۰ درخواست در ساعت برای هر IP دارد و پشت فیلترشکن‌ها زود ۴۰۳ می‌دهد):
+// نسخه از ریدایرکت صفحه‌ی releases/latest خوانده می‌شود و فایل از لینک مستقیم دانلود می‌شود.
 const REPO = process.env.UPDATE_REPO || 'sherman-co/factormaker';
-const API = (process.env.UPDATE_API || 'https://api.github.com').replace(/\/+$/, '');
-const TEST_MODE = !!process.env.UPDATE_API; // آدرس سفارشی فقط برای آزمون
-const ASSET_RE = process.env.UPDATE_ASSET_PATTERN ? new RegExp(process.env.UPDATE_ASSET_PATTERN) : /win-x64\.zip$/i;
-const CAN_AUTO = SEA && (process.platform === 'win32' || TEST_MODE);
+const BASE = (process.env.UPDATE_BASE || `https://github.com/${REPO}`).replace(/\/+$/, '');
+const API = (process.env.UPDATE_API || 'https://api.github.com').replace(/\/+$/, ''); // فقط وقتی توکن داده شده (مخزن خصوصی)
+const TEST_MODE = !!(process.env.UPDATE_BASE || process.env.UPDATE_API); // آدرس سفارشی فقط برای آزمون
+const ASSET_NAME = process.env.UPDATE_ASSET_NAME || 'FactorMaker-win-x64.zip';
+const CAN_AUTO = SEA && (process.platform === 'win32' || TEST_MODE || !!process.env.UPDATE_ALLOW_ANY);
 const EXE_NAME = process.platform === 'win32' ? 'FactorMaker.exe' : 'FactorMaker';
-const ALLOWED_HOSTS = /(^|\.)(github\.com|githubusercontent\.com)$/;
+const UA = { 'User-Agent': 'FactorMaker-updater' };
 
 export function cmpVersions(a, b) {
   const pa = String(a).replace(/^v/, '').split('.').map((x) => parseInt(x, 10) || 0);
@@ -21,46 +26,89 @@ export function cmpVersions(a, b) {
   return 0;
 }
 
-async function latestRelease() {
-  const res = await fetch(`${API}/repos/${REPO}/releases/latest`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'FactorMaker-updater' }, signal: AbortSignal.timeout(15_000) });
-  if (!res.ok) throw new Error(res.status === 404 ? 'هنوز نسخه‌ای منتشر نشده است' : `پاسخ ناموفق از GitHub (${res.status})`);
-  return res.json();
+const HELP = ' — اگر GitHub از اینترنت شما بسته است، «پروکسی» را در «تنظیمات ← اشتراک‌گذاری» تعریف و «استفاده برای به‌روزرسانی» را تیک بزنید، یا از «صفحه‌ی دانلود» دستی بگیرید.';
+
+function friendly(e) {
+  if (e.userMessage) return e.userMessage;
+  const code = e.cause?.code || e.code || '';
+  if (e.name === 'TimeoutError') return 'زمان اتصال به GitHub تمام شد' + HELP;
+  if (/ENOTFOUND|EAI_AGAIN/.test(code)) return 'آدرس GitHub پیدا نشد (اینترنت قطع است یا فیلتر شده)' + HELP;
+  if (/ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|UND_ERR/.test(code) || /fetch failed|socks|proxy/i.test(e.message)) return `اتصال به GitHub برقرار نشد${code ? ' (' + code + ')' : ''}` + HELP;
+  if (/CERT|TLS|SSL/i.test(code + e.message)) return 'خطای گواهی امنیتی هنگام اتصال به GitHub (ساعت سیستم یا آنتی‌ویروس/فیلترشکن را بررسی کنید)';
+  return e.message;
+}
+const httpError = (status, withToken) => Object.assign(new Error(`GitHub پاسخ ${status} داد`), {
+  userMessage: withToken
+    ? (status === 401 || status === 403 || status === 404 ? `GitHub توکن را نپذیرفت یا اجازه‌ی خواندن مخزن را ندارد (${status}). توکن را بررسی کنید: دسترسی «Contents: Read-only» روی همین مخزن و منقضی نشده باشد.` : `GitHub پاسخ ${status} داد` + HELP)
+    : (status === 404 ? 'نسخه‌ای پیدا نشد. اگر مخزن GitHub «خصوصی» است، توکن GitHub را در همین بخش وارد کنید (یا مخزن را عمومی کنید).'
+      : status === 403 || status === 429 ? `GitHub موقتاً درخواست‌ها را محدود کرده (${status}) — چند دقیقه بعد دوباره امتحان کنید یا پروکسی/فیلترشکن را عوض کنید.` : `GitHub پاسخ ${status} داد` + HELP),
+});
+
+// ---- مخزن عمومی: بدون API و بدون سهمیه (ریدایرکت صفحه‌ی releases/latest + لینک مستقیم دانلود)
+async function latestWeb(proxy) {
+  const res = await fetch(`${BASE}/releases/latest`, { redirect: 'manual', headers: UA, dispatcher: proxyDispatcher(proxy), signal: AbortSignal.timeout(20_000) });
+  const loc = res.headers.get('location');
+  if (res.status >= 300 && res.status < 400 && loc) {
+    const m = /\/releases\/tag\/([^/?#]+)$/.exec(decodeURIComponent(loc));
+    if (m) return { version: m[1].replace(/^v/, ''), notes: '', url: `${BASE}/releases/download/v${m[1].replace(/^v/, '')}/${ASSET_NAME}` };
+  }
+  throw httpError(res.status, false);
 }
 
-export async function checkUpdate(current) {
+// ---- مخزن خصوصی: با توکن فقط‌خواندنی از API
+const apiHeaders = (token, accept = 'application/vnd.github+json') => ({ ...UA, Accept: accept, Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' });
+async function latestApi(token, proxy) {
+  const res = await fetch(`${API}/repos/${REPO}/releases/latest`, { headers: apiHeaders(token), dispatcher: proxyDispatcher(proxy), signal: AbortSignal.timeout(20_000) });
+  if (!res.ok) throw httpError(res.status, true);
+  const rel = await res.json();
+  const asset = (rel.assets || []).find((a) => a.name === ASSET_NAME);
+  if (!asset) throw Object.assign(new Error('asset'), { userMessage: `فایل ${ASSET_NAME} در آخرین Release پیدا نشد` });
+  return { version: String(rel.tag_name || '').replace(/^v/, ''), notes: rel.body || '', url: `${API}/repos/${REPO}/releases/assets/${asset.id}`, apiDownload: true, digest: asset.digest };
+}
+
+const latest = ({ token, proxy }) => (token ? latestApi(token, proxy) : latestWeb(proxy));
+
+export async function checkUpdate(current, { proxy, token } = {}) {
   let rel;
-  try { rel = await latestRelease(); } catch (e) {
-    return { current, error: e.name === 'TimeoutError' || e.cause ? 'اتصال به GitHub برقرار نشد (اینترنت یا فیلترشکن را بررسی کنید)' : e.message, canAutoUpdate: false };
-  }
-  const latest = String(rel.tag_name || '').replace(/^v/, '');
-  const asset = (rel.assets || []).find((a) => ASSET_RE.test(a.name));
+  try { rel = await latest({ token, proxy }); } catch (e) { return { current, error: friendly(e), canAutoUpdate: false, url: `${BASE}/releases`, needsToken: !token }; }
   return {
-    current, latest, newer: !!latest && cmpVersions(latest, current) > 0, url: rel.html_url, notes: rel.body || '', published: rel.published_at,
-    asset: asset ? { name: asset.name, size: asset.size } : null,
-    canAutoUpdate: CAN_AUTO && !!asset, runningFromSource: !SEA,
+    current, latest: rel.version, newer: cmpVersions(rel.version, current) > 0, url: `${BASE}/releases/tag/v${rel.version}`, notes: rel.notes,
+    asset: { name: ASSET_NAME }, canAutoUpdate: CAN_AUTO, runningFromSource: !SEA, viaToken: !!token,
   };
 }
 
-async function download(url, expectedSha) {
-  const u = new URL(url);
-  if (!TEST_MODE && !(u.protocol === 'https:' && ALLOWED_HOSTS.test(u.hostname))) throw new Error('آدرس دانلود مجاز نیست');
-  const res = await fetch(url, { headers: { 'User-Agent': 'FactorMaker-updater' }, redirect: 'follow', signal: AbortSignal.timeout(10 * 60_000) });
-  if (!res.ok) throw new Error(`دانلود ناموفق (${res.status})`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  if (expectedSha) {
-    const sha = crypto.createHash('sha256').update(buf).digest('hex');
-    if (sha !== expectedSha.replace(/^sha256:/, '')) throw new Error('هش فایل دانلودشده با GitHub نمی‌خواند؛ به‌روزرسانی لغو شد');
-  }
-  return buf;
+async function download(rel, { token, proxy }) {
+  const res = await fetch(rel.url, {
+    headers: rel.apiDownload ? apiHeaders(token, 'application/octet-stream') : UA, redirect: 'follow',
+    dispatcher: proxyDispatcher(proxy), signal: AbortSignal.timeout(10 * 60_000),
+  });
+  if (!res.ok) throw httpError(res.status, !!token);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/** هش SHA-256: از digest دارایی (API) یا فایل .sha256 کنار Release؛ اگر نبود null (نسخه‌های قدیمی). */
+async function expectedSha(rel, { proxy }) {
+  if (rel.digest) return rel.digest.replace(/^sha256:/, '').toLowerCase();
+  if (rel.apiDownload) return null;
+  try {
+    const res = await fetch(rel.url + '.sha256', { headers: UA, redirect: 'follow', dispatcher: proxyDispatcher(proxy), signal: AbortSignal.timeout(30_000) });
+    if (!res.ok) return null;
+    const m = /\b([a-fA-F0-9]{64})\b/.exec(await res.text());
+    return m ? m[1].toLowerCase() : null;
+  } catch { return null; }
 }
 
 /** دانلود، اعتبارسنجی، آماده‌سازی و اجرای اسکریپت جایگزینی. پس از برگشت، فراخوان باید برنامه را ببندد. */
-export async function installUpdate({ backup }) {
+export async function installUpdate({ backup, proxy, token }) {
   if (!CAN_AUTO) throw new Error('به‌روزرسانی خودکار فقط در نسخه‌ی exe ویندوز ممکن است');
-  const rel = await latestRelease();
-  const asset = (rel.assets || []).find((a) => ASSET_RE.test(a.name));
-  if (!asset) throw new Error('فایل نسخه‌ی ویندوز در Release پیدا نشد');
-  const buf = await download(asset.browser_download_url, asset.digest);
+  let version; let buf;
+  try {
+    const rel = await latest({ token, proxy });
+    version = rel.version;
+    buf = await download(rel, { token, proxy });
+    const sha = await expectedSha(rel, { proxy });
+    if (sha && crypto.createHash('sha256').update(buf).digest('hex') !== sha) throw new Error('هش فایل دانلودشده با مقدار منتشرشده نمی‌خواند؛ به‌روزرسانی لغو شد');
+  } catch (e) { throw new Error(friendly(e)); }
 
   const stage = path.join(ROOT, 'update-tmp');
   fs.rmSync(stage, { recursive: true, force: true });
@@ -115,5 +163,5 @@ export async function installUpdate({ backup }) {
     ].join('\n'), { mode: 0o755 });
     spawn('sh', [script], { detached: true, stdio: 'ignore' }).unref();
   }
-  return { version: String(rel.tag_name || '').replace(/^v/, '') };
+  return { version };
 }

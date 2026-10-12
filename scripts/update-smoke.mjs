@@ -23,16 +23,26 @@ files['FactorMaker/package.json'] = new Uint8Array(Buffer.from(JSON.stringify({ 
 const zip = Buffer.from(zipSync(files, { level: 1 }));
 const sha = crypto.createHash('sha256').update(zip).digest('hex');
 const mockPort = 3150; const appPort = 3151;
+const tokenMode = process.env.SMOKE_MODE === 'token'; // مخزن خصوصی: API با توکن
 const mock = http.createServer((req, res) => {
-  if (req.url.startsWith('/repos/')) {
+  if (req.url === '/repos/sherman-co/factormaker/releases/latest') {
+    if (req.headers.authorization !== 'Bearer smoke-token') { res.statusCode = 404; return res.end('{}'); }
     res.setHeader('content-type', 'application/json');
-    return res.end(JSON.stringify({ tag_name: 'v9.9.9', html_url: 'http://x', body: 'test', assets: [{ name: 'new.zip', size: zip.length, digest: 'sha256:' + sha, browser_download_url: `http://127.0.0.1:${mockPort}/new.zip` }] }));
+    return res.end(JSON.stringify({ tag_name: 'v9.9.9', body: 'x', assets: [{ id: 5, name: 'FactorMaker-win-x64.zip', digest: 'sha256:' + sha }] }));
   }
-  res.setHeader('content-type', 'application/zip'); res.end(zip);
+  if (req.url === '/repos/sherman-co/factormaker/releases/assets/5') {
+    if (req.headers.authorization !== 'Bearer smoke-token' || req.headers.accept !== 'application/octet-stream') { res.statusCode = 404; return res.end(); }
+    res.setHeader('content-type', 'application/octet-stream'); return res.end(zip);
+  }
+  if (tokenMode) { res.statusCode = 404; return res.end(); } // وب برای مخزن خصوصی ۴۰۴ است
+  if (req.url === '/repo/releases/latest') { res.statusCode = 302; res.setHeader('location', `http://127.0.0.1:${mockPort}/repo/releases/tag/v9.9.9`); return res.end(); }
+  if (req.url === '/repo/releases/download/v9.9.9/FactorMaker-win-x64.zip.sha256') return res.end(`${sha}  FactorMaker-win-x64.zip\n`);
+  if (req.url === '/repo/releases/download/v9.9.9/FactorMaker-win-x64.zip') { res.setHeader('content-type', 'application/zip'); return res.end(zip); }
+  res.statusCode = 404; res.end();
 }).listen(mockPort);
 
 const base = `http://127.0.0.1:${appPort}`;
-const env = { ...process.env, PORT: String(appPort), ADMIN_PASSWORD: 'upd-pass-1', OPEN_BROWSER: '0', UPDATE_API: `http://127.0.0.1:${mockPort}`, UPDATE_ASSET_PATTERN: 'new\\.zip$' };
+const env = { ...process.env, PORT: String(appPort), ADMIN_PASSWORD: 'upd-pass-1', OPEN_BROWSER: '0', UPDATE_BASE: `http://127.0.0.1:${mockPort}/repo`, UPDATE_API: `http://127.0.0.1:${mockPort}` };
 const outFd = fs.openSync(path.join(work, 'exe.log'), 'a');
 const child = spawn(path.join(app, exeName), [], { cwd: app, env, stdio: ['ignore', outFd, outFd], detached: false });
 const version = async () => { try { return (await (await fetch(base + '/api/version', { signal: AbortSignal.timeout(1500) })).json()).version; } catch { return null; } };
@@ -45,6 +55,11 @@ try {
   const cookie = l.headers.get('set-cookie').split(';')[0];
   const H = { 'Content-Type': 'application/json', cookie };
   await fetch(base + '/api/products', { method: 'POST', headers: H, body: JSON.stringify({ code: '101', description: 'باقی می‌ماند', unit: 'عدد', price: 5 }) });
+  if (tokenMode) {
+    const bad = await (await fetch(base + '/api/update/check', { headers: H })).json();
+    must(bad.error && /توکن/.test(bad.error), 'private repo without token -> helpful error');
+    await fetch(base + '/api/settings', { method: 'PUT', headers: H, body: JSON.stringify({ update_token: 'smoke-token' }) });
+  }
   const chk = await (await fetch(base + '/api/update/check', { headers: H })).json();
   must(chk.newer && chk.canAutoUpdate, 'update available + auto-update allowed');
   const inst = await fetch(base + '/api/update/install', { method: 'POST', headers: H, body: JSON.stringify({ confirm: true }) });

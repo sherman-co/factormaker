@@ -46,6 +46,11 @@ export function parseProxy(str) {
   return /^(https?|socks4a?|socks5h?):$/.test(u.protocol) && u.hostname ? u : null;
 }
 
+/** dispatcher undici برای آدرس پروکسی (یا undefined اگر پروکسی ندارد) */
+export function proxyDispatcher(proxy) {
+  return dispatcherFor(proxy);
+}
+
 function dispatcherFor(proxy) {
   if (!proxy) return undefined;
   if (!dispatchers.has(proxy)) {
@@ -86,7 +91,8 @@ async function sendOne(cfg, chat, { file, text }) {
 }
 
 /**
- * ارسال به چند پلتفرم. payload: {file:{buffer,filename,mime,caption}} یا {text}
+ * ارسال به چند پلتفرم. payload: {file:{buffer,filename,mime}, caption, mode} یا {text}
+ * mode: caption = متن زیر فایل | before = اول متن (پیام جدا) و بعد فایل | none = فقط فایل
  * خروجی: [{platform,label,ok,error?}]
  */
 export async function shareTo(settings, platforms, payload) {
@@ -97,7 +103,13 @@ export async function shareTo(settings, platforms, payload) {
     if (!cfg.enabled) { results.push({ platform: key, label: cfg.label, ok: false, error: 'در تنظیمات فعال نیست' }); continue; }
     if (!cfg.token || !cfg.chats.length) { results.push({ platform: key, label: cfg.label, ok: false, error: 'توکن یا شناسه‌ی چت در تنظیمات وارد نشده است' }); continue; }
     try {
-      for (const chat of cfg.chats) await sendOne(cfg, chat, payload);
+      for (const chat of cfg.chats) {
+        if (!payload.file) { await sendOne(cfg, chat, payload); continue; }
+        const cap = (payload.caption || '').trim();
+        const mode = payload.mode || 'caption';
+        if (mode === 'before' && cap) await sendOne(cfg, chat, { text: cap });
+        await sendOne(cfg, chat, { file: { ...payload.file, caption: mode === 'caption' ? cap : '' } });
+      }
       results.push({ platform: key, label: cfg.label, ok: true });
     } catch (e) {
       results.push({ platform: key, label: cfg.label, ok: false, error: e.message });

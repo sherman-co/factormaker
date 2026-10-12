@@ -12,14 +12,20 @@ const received = [];
 let mock; let mockBase;
 let app; let srv; let base; let cookie; let closeBrowser; let tmp;
 const SECRET = 'SECRET-TOKEN-123';
+let repoPrivate = false; // شبیه‌سازی مخزن خصوصی: وب ۴۰۴ می‌دهد و API فقط با توکن جواب می‌دهد
 
 before(async () => {
   mock = http.createServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c);
     const body = Buffer.concat(chunks);
-    if (req.url.startsWith('/repos/')) {
+    if (req.url === '/repos/sherman-co/factormaker/releases/latest') {
+      if (req.headers.authorization !== 'Bearer GHTOKEN-1') { res.statusCode = 404; return res.end('{}'); }
       res.setHeader('content-type', 'application/json');
-      return res.end(JSON.stringify({ tag_name: 'v9.9.9', html_url: 'http://x/r', body: 'نکات', assets: [{ name: 'FactorMaker-win-x64.zip', size: 10, digest: 'sha256:00', browser_download_url: 'http://x/a.zip' }] }));
+      return res.end(JSON.stringify({ tag_name: 'v9.9.9', body: 'نکات نسخه', assets: [{ id: 7, name: 'FactorMaker-win-x64.zip', digest: 'sha256:' + '0'.repeat(64) }] }));
+    }
+    if (req.url === '/repo/releases/latest') { // مثل GitHub: ریدایرکت به صفحه‌ی تگ آخرین نسخه
+      if (repoPrivate) { res.statusCode = 404; return res.end(); }
+      res.statusCode = 302; res.setHeader('location', `${mockBase}/repo/releases/tag/v9.9.9`); return res.end();
     }
     let fields = {};
     if ((req.headers['content-type'] || '').startsWith('multipart/')) {
@@ -33,6 +39,7 @@ before(async () => {
   });
   await new Promise((r) => mock.listen(0, '127.0.0.1', r));
   mockBase = `http://127.0.0.1:${mock.address().port}`;
+  process.env.UPDATE_BASE = `${mockBase}/repo`;
   process.env.UPDATE_API = mockBase;
   process.env.ADMIN_PASSWORD = 'secret12';
   const { createApp } = await import('../server/app.js');
@@ -174,6 +181,13 @@ test('پروکسی: HTTP (CONNECT) و SOCKS5؛ آدرس نامعتبر؛ فقط 
     await call('PUT', '/api/settings', { proxy_url: `socks5://127.0.0.1:${socks.address().port}` });
     assert.equal((await send()).ok, true); assert.ok(hits.socks >= 1, 'SOCKS5 proxy used');
 
+    // بررسی نسخه هم فقط با تیک «استفاده برای به‌روزرسانی» از پروکسی می‌گذرد
+    const before = hits.socks;
+    assert.equal((await call('GET', '/api/update/check')).latest, '9.9.9'); assert.equal(hits.socks, before);
+    await call('PUT', '/api/settings', { update_use_proxy: true, proxy_url: `socks5://127.0.0.1:${socks.address().port}/?fresh=1` }); // آدرس تازه = اتصال تازه (بدون keep-alive قبلی)
+    assert.equal((await call('GET', '/api/update/check')).latest, '9.9.9'); assert.ok(hits.socks > before, 'update check via proxy');
+    await call('PUT', '/api/settings', { update_use_proxy: false });
+
     // پروکسی خراب: خطای فارسی و بدون نشت
     await call('PUT', '/api/settings', { proxy_url: 'http://127.0.0.1:1' });
     const bad = await send();
@@ -222,10 +236,31 @@ test('لوگو، حالت سربرگ و رنگ پوسته', async () => {
   assert.equal((await call('DELETE', '/api/settings/logo')).header_mode, 'name');
 });
 
+test('مخزن خصوصی: بدون توکن خطای راهنما، با توکن درست و توکن نشت نمی‌کند', async () => {
+  repoPrivate = true;
+  try {
+    const noTok = await call('GET', '/api/update/check');
+    assert.match(noTok.error, /توکن/);
+    assert.equal(noTok.needsToken, true);
+    const put = await call('PUT', '/api/settings', { update_token: 'BAD' });
+    assert.equal(put.update_has_token, true);
+    assert.equal(put.update_token, undefined);
+    assert.match((await call('GET', '/api/update/check')).error, /توکن را نپذیرفت/);
+    await call('PUT', '/api/settings', { update_token: 'GHTOKEN-1' });
+    const ok = await call('GET', '/api/update/check');
+    assert.equal(ok.latest, '9.9.9'); assert.equal(ok.viaToken, true); assert.equal(ok.notes, 'نکات نسخه');
+    assert.ok(!JSON.stringify(await call('GET', '/api/settings')).includes('GHTOKEN-1'));
+  } finally {
+    repoPrivate = false;
+    await call('PUT', '/api/settings', { clear_update_token: true });
+  }
+});
+
 test('بررسی نسخه‌ی جدید (GitHub ساختگی)', async () => {
   const u = await call('GET', '/api/update/check');
   assert.equal(u.latest, '9.9.9');
   assert.equal(u.newer, true);
+  assert.equal(u.url, `${mockBase}/repo/releases/tag/v9.9.9`);
   assert.equal(u.canAutoUpdate, false); // خارج از exe خودکار نیست
   assert.equal(u.runningFromSource, true);
   assert.equal((await call('POST', '/api/update/install', { confirm: true })).http, 400);
@@ -233,4 +268,78 @@ test('بررسی نسخه‌ی جدید (GitHub ساختگی)', async () => {
   const { cmpVersions } = await import('../server/update.js');
   assert.equal(cmpVersions('1.10.0', '1.9.9'), 1);
   assert.equal(cmpVersions('v1.2.2', '1.2.2'), 0);
+});
+
+test('نام فایل و متن ارسال قابل تنظیم؛ ترتیب ارسال (کپشن / اول متن / بدون متن)', async () => {
+  await call('PUT', '/api/settings', { tg_enabled: true, tg_token: SECRET, tg_chat: '555', tg_base: mockBase, bale_enabled: false, proxy_url: '', tg_use_proxy: false });
+  const inv = await call('POST', '/api/invoices', { jdate: '1405/07/20', doc_type: 'invoice', buyer: { name: 'خریدار نمونه' }, items: [{ code: '101', qty: 2 }] });
+  const n = inv.number;
+  const prev = async (extra = {}) => call('POST', '/api/share/preview', { kind: 'invoice', id: inv.id, ...extra });
+  const set = (o) => call('PUT', '/api/settings', o);
+
+  // پیش‌فرض: شماره - خریدار ؛ متن: عنوان، خریدار، مبلغ
+  let p = await prev();
+  assert.equal(p.filename, `${n} - خریدار نمونه.pdf`);
+  assert.match(p.caption, /^فاکتور شماره/);
+  assert.match(p.caption, /خریدار: خریدار نمونه/);
+  assert.match(p.caption, /مبلغ قابل پرداخت/);
+  assert.ok(!/تاریخ/.test(p.caption));
+  assert.equal(p.mode, 'caption');
+
+  // ترکیب‌های نام فایل
+  await set({ share_file_type: true, share_file_number: true, share_file_date: true, share_file_buyer: false, share_file_sep: '_' });
+  assert.equal((await prev()).filename, `فاکتور_${n}_1405-07-20.pdf`);
+  await set({ share_file_type: false, share_file_date: false, share_file_buyer: true, share_file_number: false });
+  assert.equal((await prev()).filename, 'خریدار نمونه.pdf'); // فقط اسم خریدار
+  await set({ share_file_buyer: false });
+  assert.equal((await prev()).filename, `${n}.pdf`); // هیچ‌کدام تیک نخورد → شماره
+  await set({ share_file_number: true, share_file_buyer: true, share_file_date: true, share_file_sep: ' - ' });
+  assert.equal((await prev()).filename, `${n} - 1405-07-20 - خریدار نمونه.pdf`); // همه با هم
+
+  // اعتبارسنجی
+  assert.equal((await set({ share_file_sep: '###' })).http, 400);
+  assert.equal((await set({ share_mode: 'weird' })).http, 400);
+
+  // متن: فقط تاریخ + یک خط دلخواه
+  await set({ share_cap_title: false, share_cap_buyer: false, share_cap_amount: false, share_cap_date: true, share_cap_extra: 'با تشکر' });
+  p = await prev();
+  assert.equal(p.caption, 'تاریخ: ۱۴۰۵/۰۷/۲۰\nبا تشکر');
+
+  // ترتیب ارسال
+  const run = async (mode, body = {}) => {
+    received.length = 0;
+    await set({ share_mode: mode });
+    const r = await call('POST', '/api/share', { kind: 'invoice', id: inv.id, platforms: ['telegram'], ...body });
+    assert.equal(r.results[0].ok, true, JSON.stringify(r));
+    return received.filter((x) => x.url.startsWith(`/bot${SECRET}/`));
+  };
+  let seq = await run('caption');
+  assert.deepEqual(seq.map((x) => x.url.split('/').pop()), ['sendDocument']);
+  assert.equal(String(seq[0].fields.caption).replace(/\r\n/g, '\n'), 'تاریخ: ۱۴۰۵/۰۷/۲۰\nبا تشکر'); // multipart خط جدید را CRLF می‌کند
+  assert.equal(seq[0].fields.document.name, `${n} - 1405-07-20 - خریدار نمونه.pdf`);
+
+  seq = await run('before');
+  assert.deepEqual(seq.map((x) => x.url.split('/').pop()), ['sendMessage', 'sendDocument']); // اول متن، بعد فایل
+  assert.equal(seq[0].fields.text, 'تاریخ: ۱۴۰۵/۰۷/۲۰\nبا تشکر');
+  assert.equal(seq[1].fields.caption, undefined);
+
+  seq = await run('none');
+  assert.deepEqual(seq.map((x) => x.url.split('/').pop()), ['sendDocument']);
+  assert.equal(seq[0].fields.caption, undefined);
+
+  // جایگزینی دستی نام و متن در پنجره‌ی ارسال (فقط برای همین ارسال)
+  seq = await run('caption', { filename: 'نام دلخواه.pdf', caption: 'سلام' });
+  assert.equal(seq[0].fields.document.name, 'نام دلخواه.pdf');
+  assert.equal(seq[0].fields.caption, 'سلام');
+  seq = await run('caption', { mode: 'before', caption: 'متن' }); // حالت همان ارسال
+  assert.deepEqual(seq.map((x) => x.url.split('/').pop()), ['sendMessage', 'sendDocument']);
+
+  // دانلود واتساپ از همان قالب (share=1) و نام دلخواه
+  const cd = async (q) => decodeURIComponent((await call('GET', `/api/invoices/${inv.id}/pdf?${q}`, null, true)).headers.get('content-disposition'));
+  assert.match(await cd('share=1'), new RegExp(`filename\\*=UTF-8''${n} - 1405-07-20 - خریدار نمونه\\.pdf`));
+  assert.match(await cd('share=1&filename=' + encodeURIComponent('a/b:c')), /a b c\.pdf/);
+  assert.match(await cd(''), new RegExp(`${n} - خریدار نمونه\\.pdf`)); // دانلود عادی تغییر نمی‌کند
+
+  // فایل‌های Excel
+  assert.equal((await call('POST', '/api/share/preview', { kind: 'products-xlsx' })).filename, 'کالاها.xlsx');
 });

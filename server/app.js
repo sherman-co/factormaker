@@ -5,6 +5,7 @@ import { ROOT, firstExisting } from './paths.js';
 import { buildInvoicesXlsx, buildProductsXlsx, buildProductsSample, parseProductsXlsx, XLSX_MIME } from './excel.js';
 import { shareTo, platformConfig, PLATFORMS, parseProxy } from './share.js';
 import { checkUpdate, installUpdate } from './update.js';
+import { shareOptions, buildFileName, buildCaption, FILE_SEPARATORS, SHARE_MODES } from '../shared/share-format.js';
 import { openDb, tx, getSettings, DEFAULT_SETTINGS } from './db.js';
 import { ensureAdmin, login, logout, userFromToken, parseCookies, setPassword, hashPw } from './auth.js';
 import { renderInvoiceHtml, stampDataUri, imageDataUri } from './print.js';
@@ -117,9 +118,13 @@ export function createApp(dataDir) {
       const ck = `${pf.prefix}_chat`;
       if (ck in vals) vals[ck] = toEnDigits(vals[ck]);
     }
+    if ('share_file_sep' in vals && !FILE_SEPARATORS.includes(b.share_file_sep)) throw bad('جداکننده‌ی نام فایل نامعتبر است');
+    if ('share_file_sep' in vals) vals.share_file_sep = b.share_file_sep; // فاصله‌ی ابتدا/انتها نباید حذف شود
+    if ('share_mode' in vals && !SHARE_MODES[vals.share_mode]) throw bad('حالت ارسال نامعتبر است');
+    if ('share_cap_extra' in vals) vals.share_cap_extra = String(b.share_cap_extra ?? '').slice(0, 300);
     if ('theme_color' in vals && !/^#[0-9a-fA-F]{6}$/.test(vals.theme_color)) throw bad('رنگ نامعتبر است');
     if ('header_mode' in vals && !['name', 'logo'].includes(vals.header_mode)) throw bad('حالت سربرگ نامعتبر است');
-    for (const k of ['tg_enabled', 'bale_enabled', 'tg_use_proxy', 'bale_use_proxy', 'show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
+    for (const k of ['tg_enabled', 'bale_enabled', 'tg_use_proxy', 'bale_use_proxy', 'update_use_proxy', 'share_file_type', 'share_file_number', 'share_file_date', 'share_file_buyer', 'share_cap_title', 'share_cap_date', 'share_cap_buyer', 'share_cap_amount', 'show_code_in_print', 'stamp_in_pdf']) if (k in b) vals[k] = b[k] === true || b[k] === '1' || b[k] === 1 ? '1' : '0';
     if ('last_invoice_number' in b) {
       const n = parseNumber(b.last_invoice_number);
       if (n === null || !Number.isInteger(n) || n < 0) throw bad('شماره آخرین فاکتور نامعتبر است');
@@ -539,7 +544,7 @@ export function createApp(dataDir) {
   async function autoShare(body, id) {
     const platforms = Array.isArray(body?.share?.platforms) ? body.share.platforms : [];
     if (!platforms.length) return undefined;
-    try { return await shareTo(getSettings(db), platforms, { file: await buildShareFile({ kind: 'invoice', id }) }); } catch (e) { return [{ platform: '-', label: 'ارسال', ok: false, error: e.message }]; }
+    try { const { buffer, filename, mime, caption, mode } = await buildShareFile({ kind: 'invoice', id }); return await shareTo(getSettings(db), platforms, { file: { buffer, filename, mime }, caption, mode }); } catch (e) { return [{ platform: '-', label: 'ارسال', ok: false, error: e.message }]; }
   }
 
   const summary = (id) => {
@@ -636,22 +641,36 @@ export function createApp(dataDir) {
   }
   app.get('/api/invoices/:id/pdf', async (req, res) => {
     const inv = loadInvoice(Number(req.params.id));
-    sendPdf(res, await invoicePdf(inv), pdfFileName(inv), req.query.inline === '1');
+    const name = cleanFileName(req.query.filename, 'pdf') || (req.query.share === '1' ? shareName(inv) : pdfFileName(inv));
+    sendPdf(res, await invoicePdf(inv), name, req.query.inline === '1');
   });
 
   // ---------- اشتراک‌گذاری (تلگرام / بله) ----------
   const fmtMoney = (n) => new Intl.NumberFormat('fa-IR').format(n);
-  async function buildShareFile(b) {
+  const typeLabel = (inv) => (inv.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور');
+  const shareData = (inv) => ({ typeLabel: typeLabel(inv), number: inv.number, jdate: inv.jdate, buyer: inv.buyer_name, payable: inv.payable });
+  const shareName = (inv) => buildFileName(shareOptions(getSettings(db)), shareData(inv));
+  const cleanFileName = (n, ext) => { const base = String(n || '').replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/\.(pdf|xlsx)$/i, '').slice(0, 120); return base ? `${base}.${ext}` : ''; };
+  /** پیش‌نمایش نام فایل/متن/حالت برای هر نوع خروجی، طبق تنظیمات */
+  function sharePreview(b) {
+    const opt = shareOptions(getSettings(db));
     if (b.kind === 'invoice') {
       const inv = loadInvoice(Number(b.id));
-      const typ = inv.doc_type === 'invoice' ? 'فاکتور' : 'پیش‌فاکتور';
-      return { buffer: await invoicePdf(inv), filename: pdfFileName(inv), mime: 'application/pdf',
-        caption: b.caption ?? `${typ} شماره ${fmtMoney(inv.number).replace(/٬/g, '')}\n${inv.buyer_name || ''}\nمبلغ قابل پرداخت: ${fmtMoney(inv.payable)} ریال` };
+      return { filename: shareName(inv), caption: buildCaption(opt, shareData(inv)), mode: opt.mode };
     }
-    if (b.kind === 'invoices-xlsx') return { buffer: await buildInvoicesXlsx(queryInvoices(b.query || {}, { all: true }).rows), filename: 'فهرست-فاکتورها.xlsx', mime: XLSX_MIME, caption: b.caption ?? 'فهرست فاکتورها' };
-    if (b.kind === 'products-xlsx') return { buffer: await buildProductsXlsx(db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all(), groupsMap()), filename: 'کالاها.xlsx', mime: XLSX_MIME, caption: b.caption ?? 'فهرست کالاها' };
+    if (b.kind === 'invoices-xlsx') return { filename: 'فهرست-فاکتورها.xlsx', caption: 'فهرست فاکتورها', mode: opt.mode };
+    if (b.kind === 'products-xlsx') return { filename: 'کالاها.xlsx', caption: 'فهرست کالاها', mode: opt.mode };
     throw bad('نوع خروجی نامعتبر است');
   }
+  async function buildShareFile(b) {
+    const pv = sharePreview(b);
+    const ext = b.kind === 'invoice' ? 'pdf' : 'xlsx';
+    const extra = { filename: cleanFileName(b.filename, ext) || pv.filename, caption: b.caption ?? pv.caption, mode: SHARE_MODES[b.mode] ? b.mode : pv.mode };
+    if (b.kind === 'invoice') return { buffer: await invoicePdf(loadInvoice(Number(b.id))), mime: 'application/pdf', ...extra };
+    if (b.kind === 'invoices-xlsx') return { buffer: await buildInvoicesXlsx(queryInvoices(b.query || {}, { all: true }).rows), mime: XLSX_MIME, ...extra };
+    return { buffer: await buildProductsXlsx(db.prepare('SELECT * FROM products ORDER BY CAST(code AS INTEGER)').all(), groupsMap()), mime: XLSX_MIME, ...extra };
+  }
+  app.post('/api/share/preview', (req, res) => res.json(sharePreview(req.body || {})));
   app.get('/api/share/platforms', (_q, res) => {
     const s = getSettings(db);
     res.json(Object.keys(PLATFORMS).map((k) => { const c = platformConfig(s, k); return { key: k, label: c.label, ready: c.enabled && !!c.token && c.chats.length > 0 }; }));
@@ -659,8 +678,8 @@ export function createApp(dataDir) {
   app.post('/api/share', async (req, res) => {
     const platforms = Array.isArray(req.body?.platforms) ? req.body.platforms : [];
     if (!platforms.length) throw bad('حداقل یک پلتفرم را انتخاب کنید');
-    const file = await buildShareFile(req.body);
-    res.json({ results: await shareTo(getSettings(db), platforms, { file }) });
+    const { buffer, filename, mime, caption, mode } = await buildShareFile(req.body);
+    res.json({ results: await shareTo(getSettings(db), platforms, { file: { buffer, filename, mime }, caption, mode }) });
   });
   app.post('/api/share/test', async (req, res) => {
     const results = await shareTo({ ...getSettings(db), [`${PLATFORMS[req.body?.platform]?.prefix}_enabled`]: '1' }, [req.body?.platform], { text: 'پیام آزمایشی از پنل پیش‌فاکتور ✅' });
@@ -668,10 +687,11 @@ export function createApp(dataDir) {
   });
 
   // ---------- به‌روزرسانی ----------
-  app.get('/api/update/check', async (_q, res) => res.json(await checkUpdate(VERSION)));
+  const updateOpts = () => { const st = getSettings(db); return { proxy: st.update_use_proxy === '1' ? (st.proxy_url || '').trim() || undefined : undefined, token: st.update_token || undefined }; };
+  app.get('/api/update/check', async (_q, res) => res.json(await checkUpdate(VERSION, updateOpts())));
   app.post('/api/update/install', async (req, res) => {
     if (req.body?.confirm !== true) throw bad('تأیید کاربر لازم است');
-    const info = await installUpdate({ backup: () => backupDb('pre-update-v' + VERSION) }).catch((e) => { throw bad(e.message); });
+    const info = await installUpdate({ backup: () => backupDb('pre-update-v' + VERSION), ...updateOpts() }).catch((e) => { throw bad(e.message); });
     res.json({ ok: true, version: info.version });
     setTimeout(() => process.emit('fm-shutdown'), 800);
   });

@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DEFAULT_GROUPS } from '../shared/format.js';
+import { SHARE_DEFAULTS } from '../shared/share-format.js';
 
 export const DEFAULT_SETTINGS = {
   company_title: '',
@@ -23,7 +24,8 @@ export const DEFAULT_SETTINGS = {
   theme_color: '#16314f',
   tg_enabled: '0', tg_token: '', tg_chat: '', tg_base: '',
   bale_enabled: '0', bale_token: '', bale_chat: '', bale_base: '',
-  proxy_url: '', tg_use_proxy: '0', bale_use_proxy: '0',
+  ...SHARE_DEFAULTS,
+  proxy_url: '', tg_use_proxy: '0', bale_use_proxy: '0', update_use_proxy: '0', update_token: '',
 };
 
 const SCHEMA = `
