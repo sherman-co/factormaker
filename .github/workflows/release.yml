@@ -28,9 +28,14 @@ jobs:
           $env:PORT = '3199'
           $env:ADMIN_PASSWORD = 'smoke-pass-1'
           $env:OPEN_BROWSER = '0'
-          $p = Start-Process -FilePath "release/FactorMaker/FactorMaker.exe" -WorkingDirectory "release/FactorMaker" -PassThru
-          try { node scripts/smoke.mjs http://127.0.0.1:3199 smoke-pass-1; if ($LASTEXITCODE -ne 0) { throw "smoke failed" } }
-          finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+          $p = Start-Process -FilePath "$PWD/release/FactorMaker/FactorMaker.exe" -WorkingDirectory "$PWD/release/FactorMaker" -PassThru -RedirectStandardOutput "$PWD/exe-out.log" -RedirectStandardError "$PWD/exe-err.log"
+          try { node scripts/smoke.mjs http://127.0.0.1:3199 smoke-pass-1; $code = $LASTEXITCODE }
+          finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            Write-Host "----- exe stdout -----"; Get-Content "$PWD/exe-out.log" -ErrorAction SilentlyContinue
+            Write-Host "----- exe stderr -----"; Get-Content "$PWD/exe-err.log" -ErrorAction SilentlyContinue
+          }
+          if ($code -ne 0) { throw "smoke failed" }
       - name: Package
         shell: pwsh
         run: |

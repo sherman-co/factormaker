@@ -56,4 +56,6 @@ async function shutdown() {
   try { db?.close(); } catch { /* ignore */ }
   process.exit(0);
 }
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e));
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e));
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) process.on(sig, shutdown);
